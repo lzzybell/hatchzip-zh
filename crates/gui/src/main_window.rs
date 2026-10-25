@@ -14,12 +14,15 @@ use hatchzip_core::human;
 use hatchzip_core::session::{self, State, display_name};
 use slint::{CloseRequestResponse, ComponentHandle, ModelRc, Timer, TimerMode};
 
+use hatchzip_i18n::{self as i18n, Key, Lang};
+
 use crate::backend::Drops;
 use crate::entries::{self, Entries, Entry};
 use crate::runner::Runner;
 use crate::settings::{self, Settings};
+use crate::strings;
 use crate::task::Task;
-use crate::text::{self, gb_text, parse_gb, plan_view};
+use crate::text::{self, entries as entry_count, gb_text, parse_gb, plan_view};
 use crate::work::{Request, sentence};
 use crate::{AboutWindow, MainWindow, Mode, PlanView, Screen, TaskView, platform, shell};
 
@@ -34,19 +37,66 @@ const ARCHIVE_EXTENSIONS: &[&str] = if hatchzip_core::archive::RAR_SUPPORTED {
 };
 
 /// The formats line under the Open button.
-const FORMATS: &str = if hatchzip_core::archive::RAR_SUPPORTED {
-    "Or drag an archive onto this window. Supported formats: ZIP, 7z, tar, tar.gz, RAR, and split \
-     archives."
-} else {
-    "Or drag an archive onto this window. Supported formats: ZIP, 7z, tar, tar.gz, and split \
-     archives."
-};
+fn formats(lang: Lang) -> &'static str {
+    if hatchzip_core::archive::RAR_SUPPORTED {
+        Key::FORMATS_RAR.text(lang)
+    } else {
+        Key::FORMATS_NO_RAR.text(lang)
+    }
+}
+
+/// The line under the entries of a half-extracted archive.
+fn mode_note(mode: Mode, output: &Path, kept: bool) -> String {
+    let lang = i18n::current();
+    match mode {
+        Mode::Fresh => String::new(),
+        Mode::Resume if kept => i18n::fill!(Key::MODE_RESUME_KEPT.text(lang), output.display()),
+        Mode::Resume => i18n::fill!(Key::MODE_RESUME.text(lang), output.display()),
+        Mode::Orphan => i18n::fill!(Key::MODE_ORPHAN.text(lang), output.display()),
+    }
+}
+
+/// What the summary line under the archive's name is built from, kept so a
+/// language switch can rebuild it.
+struct SummaryParts {
+    format: Option<String>,
+    len: Option<u64>,
+    items: Option<usize>,
+    total: u64,
+    left: Option<u64>,
+}
+
+impl SummaryParts {
+    fn text(&self, lang: Lang) -> String {
+        let mut parts = Vec::new();
+        if let (Some(format), Some(len), Some(items)) = (&self.format, self.len, self.items) {
+            parts.push(i18n::fill!(Key::SUMMARY_ARCHIVE.text(lang), format));
+            match self.left {
+                Some(left) => parts.push(i18n::summary_remaining(
+                    lang,
+                    &human(left),
+                    &entry_count(items),
+                )),
+                None => {
+                    parts.push(human(len));
+                    parts.push(entry_count(items));
+                }
+            }
+        }
+        parts.push(i18n::fill!(
+            Key::SUMMARY_UNCOMPRESSED.text(lang),
+            human(self.total)
+        ));
+        parts.join(" \u{b7} ")
+    }
+}
 
 /// An archive opened read-only for looking at. It takes no lock, so another
 /// HatchZip can still extract it; extraction reopens it for writing.
 struct Loaded {
     name: String,
     summary: String,
+    parts: SummaryParts,
     entries: Vec<Entry>,
     mode: Mode,
     /// Half extracted by a run that keeps the archive.
@@ -92,26 +142,17 @@ fn load(archive: &Path, password: Option<String>, reads: &Arc<Reads>) -> Result<
         Some(j) => display_name(j),
         None => file_name,
     };
-    let mut summary = Vec::new();
-    if let Some(j) = &job {
-        summary.push(format!("{} archive", j.format_name.to_uppercase()));
-        // Half extracted, the list only holds what is left to do.
-        match left {
-            None => {
-                summary.push(human(j.storage.original_len()));
-                summary.push(text::plural(j.item_count(), "entry", "entries"));
-            }
-            Some(left) => summary.push(format!(
-                "{} in {} remaining",
-                human(left),
-                text::plural(j.item_count(), "entry", "entries")
-            )),
-        }
-    }
-    summary.push(format!("{} uncompressed", human(total)));
+    let parts = SummaryParts {
+        format: job.as_ref().map(|j| j.format_name.to_uppercase()),
+        len: job.as_ref().map(|j| j.storage.original_len()),
+        items: job.as_ref().map(|j| j.item_count()),
+        total,
+        left,
+    };
     Ok(Loaded {
         name,
-        summary: summary.join(" \u{b7} "),
+        summary: parts.text(i18n::current()),
+        parts,
         entries: job.as_ref().map(entries::collect).unwrap_or_default(),
         mode,
         kept,
@@ -152,6 +193,10 @@ struct App {
     /// The person changed the right-click switch, so the startup check,
     /// which may answer later, must not overwrite it.
     shell_touched: Cell<bool>,
+    /// The language the window is showing.
+    lang: Cell<Lang>,
+    /// The pieces the summary line is built from.
+    summary: RefCell<Option<SummaryParts>>,
 }
 
 thread_local! {
@@ -189,12 +234,21 @@ pub fn build(
     settings_file: Option<PathBuf>,
 ) -> Result<MainWindow> {
     let ui = MainWindow::new()?;
+    let lang = settings
+        .lang
+        .as_deref()
+        .and_then(Lang::parse)
+        .unwrap_or_else(i18n::current);
+    i18n::set_current(lang);
+    strings::apply(&ui, lang);
+    ui.set_lang_en(lang == Lang::En);
+    ui.set_lang_zh(lang == Lang::Zh);
     ui.set_keep_free(gb_text(settings.keep_free).into());
     ui.set_verify_first(settings.verify_first);
     ui.set_remove_archive(!settings.keep_archive);
-    ui.set_formats(FORMATS.into());
+    ui.set_formats(formats(lang).into());
     ui.set_shell_menu_available(platform::SHELL_MENU);
-    ui.set_shell_menu_label(platform::SHELL_MENU_LABEL.into());
+    ui.set_shell_menu_label(platform::shell_menu_label(lang).into());
 
     let weak = ui.as_weak();
     let runner = Runner::install(move |task: &Task| {
@@ -220,6 +274,8 @@ pub fn build(
         notice_timer: Timer::default(),
         loading_timer: Timer::default(),
         shell_touched: Cell::new(false),
+        lang: Cell::new(lang),
+        summary: RefCell::new(None),
     });
     APP.with(|a| *a.borrow_mut() = Some(app.clone()));
 
@@ -302,6 +358,10 @@ fn wire(ui: &MainWindow, app: &Rc<App>) {
     ui.on_shell_menu_toggled(move || a.shell_menu_toggled());
     let a = app.clone();
     ui.on_give_back(move || a.give_back());
+    let a = app.clone();
+    ui.on_choose_english(move || a.set_language(Lang::En));
+    let a = app.clone();
+    ui.on_choose_chinese(move || a.set_language(Lang::Zh));
     let a = app.clone();
     ui.on_quit(move || {
         if a.runner.may_close() {
@@ -401,6 +461,7 @@ impl App {
         ui.set_mode(loaded.mode);
         ui.set_kept_run(loaded.kept);
         ui.set_output(loaded.output.display().to_string().into());
+        ui.set_mode_note(mode_note(loaded.mode, &loaded.output, loaded.kept).into());
         ui.set_screen(Screen::Opened);
         *self.name.borrow_mut() = loaded.name;
         *self.password.borrow_mut() = loaded.password;
@@ -408,6 +469,7 @@ impl App {
         self.kept_run.set(loaded.kept);
         *self.output.borrow_mut() = loaded.output;
         *self.job.borrow_mut() = Arc::new(Mutex::new(loaded.job));
+        *self.summary.borrow_mut() = Some(loaded.parts);
         self.refresh_plan();
     }
 
@@ -417,7 +479,7 @@ impl App {
             ui.set_plan(PlanView {
                 ready: true,
                 fits: true,
-                verdict: "No entries remaining".into(),
+                verdict: Key::NO_ENTRIES_REMAINING.text(i18n::current()).into(),
                 ..Default::default()
             });
             return;
@@ -437,9 +499,9 @@ impl App {
                     // Such as a solid RAR: it can only be extracted kept.
                     Some(why) => PlanView {
                         fits: false,
-                        verdict: sentence(&format!(
-                            "{why}. Turn off \"Remove the archive during extraction\" to \
-                             extract it and keep the archive"
+                        verdict: sentence(&i18n::fill!(
+                            Key::REFUSAL_KEEP.text(i18n::current()),
+                            why
                         ))
                         .into(),
                         ..plan_view(&plan)
@@ -490,6 +552,40 @@ impl App {
         }
     }
 
+    /// Switches every window to `lang` and remembers the choice.
+    fn set_language(&self, lang: Lang) {
+        if lang == self.lang.get() {
+            return;
+        }
+        self.lang.set(lang);
+        i18n::set_current(lang);
+        self.change_settings(|s| s.lang = Some(lang.tag().to_string()));
+        let ui = self.ui();
+        strings::apply(&ui, lang);
+        ui.set_lang_en(lang == Lang::En);
+        ui.set_lang_zh(lang == Lang::Zh);
+        ui.set_formats(formats(lang).into());
+        ui.set_shell_menu_label(platform::shell_menu_label(lang).into());
+        ui.set_mode_note(
+            mode_note(self.mode.get(), &self.output.borrow(), self.kept_run.get()).into(),
+        );
+        if let Some(summary) = self.summary.borrow().as_ref() {
+            ui.set_summary(summary.text(lang).into());
+        }
+        self.runner.relocalize();
+        self.refresh_plan();
+        if let Some(w) = self.about.borrow().as_ref() {
+            strings::apply_about(w, lang);
+        }
+        // The right-click menu keeps its labels in the registry, so rewrite
+        // them in the new language while it is on.
+        if platform::SHELL_MENU && ui.get_shell_menu_on() {
+            std::thread::spawn(|| {
+                let _ = shell::set_menu(true);
+            });
+        }
+    }
+
     fn shell_menu_toggled(&self) {
         self.shell_touched.set(true);
         let on = self.ui().get_shell_menu_on();
@@ -497,8 +593,14 @@ impl App {
             let result = shell::set_menu(on);
             post(move |app| {
                 let (text, bad) = match result {
-                    Ok(()) if on => ("Context menu entries added.".to_string(), false),
-                    Ok(()) => ("Context menu entries removed.".to_string(), false),
+                    Ok(()) if on => (
+                        Key::NOTICE_MENU_ADDED.text(i18n::current()).to_string(),
+                        false,
+                    ),
+                    Ok(()) => (
+                        Key::NOTICE_MENU_REMOVED.text(i18n::current()).to_string(),
+                        false,
+                    ),
                     Err(e) => {
                         // Show the box as it really is.
                         app.ui().set_shell_menu_on(!on);
@@ -530,9 +632,12 @@ impl App {
         }
         let ui = self.ui();
         let mut dialog = rfd::AsyncFileDialog::new()
-            .set_title("Open archive")
-            .add_filter("Archives", ARCHIVE_EXTENSIONS)
-            .add_filter("All files", &["*"])
+            .set_title(Key::DIALOG_OPEN_TITLE.text(i18n::current()))
+            .add_filter(
+                Key::FILTER_ARCHIVES.text(i18n::current()),
+                ARCHIVE_EXTENSIONS,
+            )
+            .add_filter(Key::FILTER_ALL_FILES.text(i18n::current()), &["*"])
             .set_parent(&ui.window().window_handle());
         if let Some(dir) = self.archive.borrow().as_ref().and_then(|a| a.parent()) {
             dialog = dialog.set_directory(dir);
@@ -553,7 +658,7 @@ impl App {
         // looking that up needs no disk access on this thread.
         let start = current.parent();
         let mut dialog = rfd::AsyncFileDialog::new()
-            .set_title("Select destination folder")
+            .set_title(Key::DIALOG_OUTPUT_TITLE.text(i18n::current()))
             .set_parent(&ui.window().window_handle());
         if let Some(dir) = start {
             dialog = dialog.set_directory(dir);
@@ -661,6 +766,7 @@ impl App {
         let mut about = self.about.borrow_mut();
         if about.is_none() {
             let Ok(w) = AboutWindow::new() else { return };
+            strings::apply_about(&w, self.lang.get());
             w.set_version(env!("CARGO_PKG_VERSION").into());
             w.on_open_link(|| {
                 let _ = open::that_detached(REPO);

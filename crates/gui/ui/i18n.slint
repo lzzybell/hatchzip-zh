@@ -1,0 +1,81 @@
+// The wording the windows show, one property per phrase. Rust fills this
+// from the catalog at startup and again when the language changes, so a
+// switch redraws every label without rebuilding a window.
+
+export global Strings {
+    // Main window: menus.
+    in property <string> menu-file: "File";
+    in property <string> menu-open: "Open…";
+    in property <string> menu-quit: "Quit";
+    in property <string> menu-settings: "Settings";
+    in property <string> menu-help: "Help";
+    in property <string> menu-about: "About HatchZip";
+    in property <string> menu-language: "Language";
+    in property <string> menu-verify: "Verify archive before extracting";
+    in property <string> menu-remove: "Remove the archive during extraction";
+    in property <string> lang-english: "English";
+    in property <string> lang-chinese: "中文";
+
+    // The empty screen.
+    in property <string> drop-to-open: "Drop the archive to open it";
+    in property <string> no-archive-open: "No archive open";
+    in property <string> empty-description: "The archive is removed progressively during extraction, so only the space for the extracted files is required.";
+    in property <string> open-archive: "Open archive…";
+    in property <string> open-another-archive: "Open another archive…";
+    in property <string> opening-prefix: "Opening ";
+    in property <string> unable-to-open-prefix: "Unable to open ";
+
+    // An opened archive.
+    in property <string> name-column: "Name";
+    in property <string> size-column: "Size";
+    in property <string> all-extracted: "All entries have been extracted.";
+    in property <string> archive-empty: "This archive is empty.";
+    in property <string> extract-to: "Extract to";
+    in property <string> browse: "Browse…";
+    in property <string> reserved-space: "Reserved space";
+    in property <string> gb: "GB";
+    in property <string> gb-invalid: "GB. Enter a number, such as 2 or 0.5.";
+    in property <string> verify-checkbox: "Verify archive before extracting";
+    in property <string> remove-checkbox: "Remove the archive during extraction";
+    in property <string> note-inplace: "The archive is removed progressively during extraction. An interrupted extraction can be resumed.";
+    in property <string> note-keep: "The archive is kept unchanged, so space is required for all extracted files. An interrupted extraction can be resumed.";
+    in property <string> test: "Test";
+    in property <string> restore-archive: "Restore archive";
+    in property <string> extract: "Extract";
+    in property <string> resume-extraction: "Resume extraction";
+    in property <string> finish: "Finish";
+
+    // The disk space panel.
+    in property <string> disk-space: "Disk space";
+    in property <string> calculating: "Calculating…";
+    in property <string> available: "Available";
+    in property <string> required-removed: "Required, archive removed";
+    in property <string> required-kept: "Required, archive kept";
+    in property <string> reserved: "Reserved";
+    in property <string> available-after: "Available after extraction";
+
+    // Buttons shared by the windows.
+    in property <string> back: "Back";
+    in property <string> cancel: "Cancel";
+    in property <string> close: "Close";
+    in property <string> pausing: "Pausing…";
+    in property <string> pause: "Pause";
+    in property <string> resume: "Resume";
+    in property <string> check-again: "Check again";
+    in property <string> retry: "Retry";
+    in property <string> open-folder: "Open folder";
+
+    // The password prompt.
+    in property <string> password-required: "Password required";
+    in property <string> password-for-prefix: "Enter the password for ";
+    in property <string> password-for-suffix: ".";
+    in property <string> password: "Password";
+    in property <string> incorrect-password: "Incorrect password.";
+    in property <string> ok: "OK";
+
+    // About.
+    in property <string> about-title: "About HatchZip";
+    in property <string> version-prefix: "Version ";
+    in property <string> about-description: "Extracts large archives in place. The archive is removed progressively during extraction, so only the space for the extracted files is required.";
+    in property <string> license: "Licensed under MIT or Apache-2.0";
+}

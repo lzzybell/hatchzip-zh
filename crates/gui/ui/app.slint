@@ -4,5 +4,8 @@ export { MainWindow, Screen, Mode, EntryRow } from "main-window.slint";
 export { TaskWindow } from "task-window.slint";
 export { AboutWindow } from "about.slint";
 export { Phase, PlanView, TaskView } from "parts.slint";
+// Exported so the generated code keeps it: every phrase has a default, and a
+// global Rust never sees would be folded away.
+export { Strings } from "i18n.slint";
 // Lets the integration test render both light and dark.
 export { Palette } from "std-widgets.slint";

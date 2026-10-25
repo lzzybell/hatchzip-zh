@@ -10,6 +10,8 @@ use anyhow::{Context, Result};
 use winreg::RegKey;
 use winreg::enums::HKEY_CURRENT_USER;
 
+use hatchzip_i18n::{self as i18n, Key};
+
 use crate::{ACTIONS, ALL_EXTENSIONS, Dirs, EXTENSIONS};
 
 const BASE: &str = r"Software\Classes\SystemFileAssociations";
@@ -44,11 +46,14 @@ pub fn register(_dirs: &Dirs, gui: &Path) -> Result<Vec<String>> {
         for (i, a) in ACTIONS.iter().enumerate() {
             // Explorer orders submenu items by key name.
             let (item, _) = menu.create_subkey(format!(r"shell\{:02}{}", i + 1, a.id))?;
-            item.set_value("MUIVerb", &a.label)?;
+            item.set_value("MUIVerb", &a.label(i18n::current()))?;
             let (command, _) = item.create_subkey("command")?;
             command.set_value("", &format!("\"{exe}\" {} \"%1\"", a.flag))?;
         }
-        written.push(format!("Explorer: .{ext} files"));
+        written.push(i18n::fill!(
+            Key::SHELL_REGISTERED.text(i18n::current()),
+            ext
+        ));
     }
     Ok(written)
 }

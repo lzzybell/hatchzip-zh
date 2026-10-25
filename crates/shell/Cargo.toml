@@ -14,6 +14,7 @@ publish = false
 rar = []
 
 [dependencies]
+hatchzip-i18n.workspace = true
 anyhow.workspace = true
 
 [target."cfg(windows)".dependencies]

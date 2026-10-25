@@ -11,6 +11,7 @@ mod platform;
 mod runner;
 pub mod settings;
 pub mod shell;
+mod strings;
 mod task;
 pub mod task_window;
 mod text;

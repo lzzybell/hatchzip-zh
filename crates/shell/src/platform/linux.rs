@@ -7,6 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
+use hatchzip_i18n::{self as i18n, Lang};
 
 use crate::{ACTIONS, Dirs, EXTENSIONS};
 
@@ -88,7 +89,9 @@ pub fn register(dirs: &Dirs, gui: &Path) -> Result<Vec<String>> {
     for a in ACTIONS {
         kde.push_str(&format!(
             "\n[Desktop Action {}]\nName={}\nIcon=archive-extract\nExec={exec} {} %F\n",
-            a.id, a.label, a.flag
+            a.id,
+            a.label(i18n::current()),
+            a.flag
         ));
     }
     write(&kde_file(dirs), &kde, true)?;
@@ -103,12 +106,12 @@ pub fn register(dirs: &Dirs, gui: &Path) -> Result<Vec<String>> {
             sh_quote(gui),
             a.flag
         );
-        write(&nautilus_file(dirs, a.label), &script, true)?;
+        write(&nautilus_file(dirs, a.label(i18n::current())), &script, true)?;
 
         let nemo = format!(
             "# {MARK}\n[Nemo Action]\nName={} with HatchZip\nIcon-Name=archive-extract\n\
              Exec={exec} {} %F\nSelection=notnone\nExtensions={};\n",
-            a.label,
+            a.label(i18n::current()),
             a.flag,
             EXTENSIONS.join(";")
         );
@@ -128,7 +131,11 @@ pub fn register(dirs: &Dirs, gui: &Path) -> Result<Vec<String>> {
 pub fn unregister(dirs: &Dirs) -> Result<()> {
     let mut paths = vec![kde_file(dirs)];
     for a in ACTIONS {
-        paths.push(nautilus_file(dirs, a.label));
+        // A script's file name is its menu label, so it was written under
+        // whichever language was in use. Remove every one.
+        for lang in Lang::ALL {
+            paths.push(nautilus_file(dirs, a.label(lang)));
+        }
         paths.push(nemo_file(dirs, a.id));
     }
     for p in paths {

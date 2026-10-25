@@ -1,5 +1,6 @@
 import { Button, LineEdit, ProgressIndicator, Spinner, Palette } from "std-widgets.slint";
 import { Theme, Meter } from "theme.slint";
+import { Strings } from "i18n.slint";
 
 export enum Phase {
     // Nothing running: the main window shows its settings and buttons.
@@ -23,6 +24,8 @@ export struct PlanView {
     in-place: string,
     // The plan is for keeping the archive.
     keep-archive: bool,
+    // "Available: ... Required: ..., plus ... reserved.", when it does not fit.
+    space-line: string,
     needed: string,
     keep: string,
     after: string,
@@ -82,7 +85,7 @@ export component SpacePanel inherits VerticalLayout {
     alignment: start;
 
     Text {
-        text: "Disk space";
+        text: Strings.disk-space;
         font-weight: 600;
     }
     if !root.plan.ready: HorizontalLayout {
@@ -94,7 +97,7 @@ export component SpacePanel inherits VerticalLayout {
             height: 16px;
         }
         Text {
-            text: "Calculating…";
+            text: Strings.calculating;
             color: Theme.muted;
             vertical-alignment: center;
         }
@@ -102,27 +105,27 @@ export component SpacePanel inherits VerticalLayout {
     if root.plan.ready: VerticalLayout {
         spacing: 8px;
         Row {
-            label: "Available";
+            label: Strings.available;
             value: root.plan.free;
         }
         // Both ways, the chosen one in bold, so the difference the archive
         // makes is in plain view.
         Row {
-            label: "Required, archive removed";
+            label: Strings.required-removed;
             value: root.plan.in-place;
             strong: !root.plan.keep-archive;
         }
         Row {
-            label: "Required, archive kept";
+            label: Strings.required-kept;
             value: root.plan.normal;
             strong: root.plan.keep-archive;
         }
         Row {
-            label: "Reserved";
+            label: Strings.reserved;
             value: root.plan.keep;
         }
         Row {
-            label: "Available after extraction";
+            label: Strings.available-after;
             value: root.plan.after;
         }
         Rectangle {
@@ -216,47 +219,47 @@ export component TaskButtons inherits HorizontalLayout {
     spacing: 8px;
 
     if root.task.can-give-back: Button {
-        text: "Restore archive";
+        text: Strings.restore-archive;
         clicked => {
             root.give-back();
         }
     }
 
     if !root.closable && (root.task.phase == Phase.paused || root.task.phase == Phase.failed || root.task.phase == Phase.no-space || (root.task.phase == Phase.done && !root.task.can-open-folder)): Button {
-        text: "Back";
+        text: Strings.back;
         clicked => {
             root.back();
         }
     }
     // Checking and testing are safe to cut short, so they can be cancelled.
     if root.closable && root.task.phase != Phase.working && root.task.phase != Phase.pausing: Button {
-        text: root.task.phase == Phase.checking || root.task.phase == Phase.verifying ? "Cancel" : "Close";
+        text: root.task.phase == Phase.checking || root.task.phase == Phase.verifying ? Strings.cancel : Strings.close;
         clicked => {
             root.close();
         }
     }
     if root.task.phase == Phase.working || root.task.phase == Phase.pausing: Button {
-        text: root.task.phase == Phase.pausing ? "Pausing…" : "Pause";
+        text: root.task.phase == Phase.pausing ? Strings.pausing : Strings.pause;
         enabled: root.task.phase == Phase.working;
         clicked => {
             root.pause();
         }
     }
     if root.task.phase == Phase.paused: Button {
-        text: "Resume";
+        text: Strings.resume;
         primary: true;
         clicked => {
             root.resume();
         }
     }
     if root.task.can-retry && (root.task.phase == Phase.failed || root.task.phase == Phase.no-space): Button {
-        text: root.task.phase == Phase.no-space ? "Check again" : "Retry";
+        text: root.task.phase == Phase.no-space ? Strings.check-again : Strings.retry;
         clicked => {
             root.resume();
         }
     }
     if root.task.phase == Phase.done && root.task.can-open-folder: Button {
-        text: "Open folder";
+        text: Strings.open-folder;
         primary: true;
         clicked => {
             root.open-folder();
@@ -298,37 +301,37 @@ export component PasswordPrompt inherits Rectangle {
                 padding: Theme.gutter;
                 spacing: 10px;
                 Text {
-                    text: "Password required";
+                    text: Strings.password-required;
                     font-size: 15px;
                     font-weight: 600;
                 }
                 Text {
-                    text: "Enter the password for " + root.name + ".";
+                    text: Strings.password-for-prefix + root.name + Strings.password-for-suffix;
                     color: Theme.muted;
                     wrap: word-wrap;
                 }
                 input := LineEdit {
                     input-type: password;
-                    placeholder-text: "Password";
+                    placeholder-text: Strings.password;
                     accepted(text) => {
                         root.ok(text);
                     }
                 }
                 if root.wrong: Text {
-                    text: "Incorrect password.";
+                    text: Strings.incorrect-password;
                     color: Theme.danger;
                 }
                 HorizontalLayout {
                     alignment: end;
                     spacing: 8px;
                     Button {
-                        text: "Cancel";
+                        text: Strings.cancel;
                         clicked => {
                             root.cancel();
                         }
                     }
                     Button {
-                        text: "OK";
+                        text: Strings.ok;
                         primary: true;
                         clicked => {
                             root.ok(input.text);

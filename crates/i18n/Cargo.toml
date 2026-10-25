@@ -1,0 +1,11 @@
+[package]
+name = "hatchzip-i18n"
+description = "The wording HatchZip shows, in English and Simplified Chinese, and which one is showing."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]

@@ -13,6 +13,7 @@ categories = ["command-line-utilities", "compression", "filesystem"]
 
 [dependencies]
 hatchzip-core.workspace = true
+hatchzip-i18n.workspace = true
 anstream = "1.0.0"
 anstyle = "1.0.14"
 anyhow.workspace = true

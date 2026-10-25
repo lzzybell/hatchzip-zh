@@ -1,10 +1,13 @@
 //! Command line definition. Also the source of the shell completions and the
-//! man page, so the three never disagree.
+//! man page, so the three never disagree. The wording lives in the catalog,
+//! so `hatchzip --help` reads in the language in use.
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use clap_complete::Shell;
+use hatchzip_i18n::{self as i18n, Key, Lang};
 
 pub const EXIT_FAILURE: u8 = 1;
 pub const EXIT_NO_SPACE: u8 = 3;
@@ -12,132 +15,42 @@ pub const EXIT_DAMAGED: u8 = 4;
 pub const EXIT_PASSWORD: u8 = 5;
 pub const EXIT_PAUSED: u8 = 130;
 
-const ABOUT: &str = "Extract large archives in place, removing the archive progressively.";
-
-/// The long help, ending with the formats this build reads.
-macro_rules! long_about {
-    ($formats:literal) => {
-        concat!(
-            "\
-Extract large archives in place, removing the archive progressively.
-
-HatchZip extracts an archive from its end and truncates each completed part from \
-the archive file, so the released space is reused for the next files. Free space \
-is required for the extracted files only, not for the files and the archive. The \
-space plan is checked before the archive is modified, and an interrupted \
-extraction resumes where it stopped when the same command is run again.
-
-With --keep-archive, HatchZip extracts like any other tool and leaves the archive \
-unchanged; free space is then required for all extracted files.
-
-Supported: ZIP (including ZIP64 and self-extracting .exe), 7z, uncompressed tar, \
-gzip-compressed tar (.tar.gz, .tgz), split archives (.001, .002, ...) of any of \
-those",
-            $formats
-        )
-    };
-}
-
-#[cfg(feature = "rar")]
-const LONG_ABOUT: &str = long_about!(
-    ", and RAR, single files and volume sets (.part1.rar, .part2.rar, ... or .rar, \
-     .r00, ...). A solid RAR archive is extracted only with --keep-archive."
-);
-
-#[cfg(not(feature = "rar"))]
-const LONG_ABOUT: &str = long_about!(
-    ". This build does not include RAR support; the release builds from hatchzip.dev \
-     and github.com/xevrion/hatchzip/releases do."
-);
-
-const AFTER_LONG_HELP: &str = "\
-Examples:
-  hatchzip check game.zip              Show the space plan without modifying anything
-  hatchzip extract game.zip            Extract to ./game, removing game.zip during extraction
-  hatchzip extract game.zip --keep-archive
-                                       Extract to ./game and keep game.zip unchanged
-  hatchzip check game.zip --keep-archive
-                                       Show whether a standard extraction fits
-  hatchzip x game.7z.001 -o D:\\Games   Extract a split archive from any of its parts
-  hatchzip extract a.zip b.7z c.tar.gz Extract several archives, one after another
-  hatchzip extract big.zip --verify-first --keep-free 10GB
-  hatchzip test game.7z                Verify every entry without writing files
-  hatchzip restore game.zip            Restore a partially extracted archive
-
-To resume an interrupted extraction, run the same command again. Progress is \
-stored in two files next to the archive (<archive>.hatchzip and \
-<archive>.hatchzip-tail); do not delete them while an extraction is incomplete. \
-To stop permanently instead, run restore: the entries not yet extracted become a \
-standard archive again. An extraction with --keep-archive resumes the same way and \
-keeps the archive when resumed.
-
-Several archives are processed one after another. extract checks the space for each \
-one just before it starts and stops at the first one that does not complete, then \
-lists what was extracted and what was not. check, test and list process every archive.
-
-Exit status:
-  0    success
-  1    failure (progress, if any, is saved)
-  2    invalid command line
-  3    insufficient disk space; the archive was not modified
-  4    the archive is damaged; no files were removed
-  5    the archive is password protected and no correct password was provided
-  130  paused with Ctrl+C; run the same command to resume
-With several archives, the status is that of the first archive that did not succeed.
-
-Encrypted archives (ZIP with ZipCrypto or AES, 7z with AES): HatchZip prompts for \
-the password, or reads --password or the HATCHZIP_PASSWORD environment variable. The \
-password is verified on one file before the archive is modified. It is never \
-stored, so resuming an interrupted extraction prompts again.";
-
 #[derive(Parser)]
 #[command(
     name = "hatchzip",
     version,
-    about = ABOUT,
-    long_about = LONG_ABOUT,
-    after_long_help = AFTER_LONG_HELP,
-    propagate_version = true
+    propagate_version = true,
+    about = "",
+    long_about = ""
 )]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
 
-    /// Print only errors and prompts
+    /// Quiet.
     #[arg(short, long, global = true)]
     pub quiet: bool,
 }
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Extract an archive, removing it progressively
-    #[command(
-        visible_alias = "x",
-        long_about = "Extract an archive, removing it progressively.\n\n\
-            Prints the space plan and asks for confirmation before starting. After an \
-            interruption by Ctrl+C, a crash or a full disk, run the same command to resume.\n\n\
-            With --keep-archive the archive is not modified and no confirmation is needed; \
-            free space is required for all extracted files.\n\n\
-            Several archives are extracted one after another. The space for each one is \
-            checked just before it starts, and the first one that does not complete stops \
-            the run."
-    )]
+    /// Extract.
+    #[command(visible_alias = "x")]
     Extract {
         #[command(flatten)]
         target: Target,
         #[command(flatten)]
         keep: Keep,
-        /// Verify every entry before modifying the archive
+        /// Verify.
         #[arg(long)]
         verify_first: bool,
         #[command(flatten)]
         space: Space,
-        /// Skip the confirmation prompt (required outside a terminal, unless
-        /// --keep-archive is given)
+        /// Yes.
         #[arg(short, long)]
         yes: bool,
     },
-    /// Show the space plan for an archive without modifying it
+    /// Check.
     #[command(visible_alias = "c")]
     Check {
         #[command(flatten)]
@@ -147,60 +60,41 @@ pub enum Command {
         #[command(flatten)]
         space: Space,
     },
-    /// List the entries of an archive
+    /// List.
     #[command(visible_alias = "l")]
     List {
-        /// The archive, or any part of a split archive. Several can be given
+        /// Archives.
         #[arg(required = true, value_name = "ARCHIVE")]
         archives: Vec<PathBuf>,
         #[command(flatten)]
         secret: Secret,
     },
-    /// Verify every entry of an archive without writing files
+    /// Test.
     #[command(visible_alias = "t")]
     Test {
-        /// The archive, or any part of a split archive. Several can be given
+        /// Archives.
         #[arg(required = true, value_name = "ARCHIVE")]
         archives: Vec<PathBuf>,
         #[command(flatten)]
         secret: Secret,
     },
-    /// Restore a partially extracted archive to a standard archive
-    #[command(
-        long_about = "Restore a partially extracted archive to a standard archive.\n\n\
-            An interrupted extraction leaves the archive containing only the entries not yet \
-            extracted, with its index saved alongside, so only HatchZip can open it. restore \
-            appends a new index for those entries, so 7-Zip, WinRAR, unzip and tar can open it \
-            again. No data is moved; only the space for the new index is required. Files \
-            already extracted remain in the destination folder. If restore is interrupted, run \
-            it again, or run extract to resume the extraction instead.\n\n\
-            An extraction started with --keep-archive never modified the archive, so restore \
-            only discards its progress."
-    )]
+    /// Restore.
     Restore {
-        /// The partially extracted archive, or any part of a split archive
+        /// Archive.
         archive: PathBuf,
     },
-    /// Print a shell completion script
-    #[command(long_about = "Print a shell completion script.\n\n\
-        bash:        hatchzip completions bash > ~/.local/share/bash-completion/completions/hatchzip\n\
-        zsh:         hatchzip completions zsh > \"${fpath[1]}/_hatchzip\"\n\
-        fish:        hatchzip completions fish > ~/.config/fish/completions/hatchzip.fish\n\
-        PowerShell:  hatchzip completions powershell >> $PROFILE")]
+    /// Completions.
     Completions { shell: Shell },
-    /// Print the man page (roff)
-    #[command(long_about = "Print the man page in roff format.\n\n\
-        hatchzip man > ~/.local/share/man/man1/hatchzip.1")]
+    /// Man page.
     Man,
 }
 
 #[derive(Args)]
 pub struct Target {
-    /// The archive, or any part of a split archive. Several can be given
+    /// Archives.
     #[arg(required = true, value_name = "ARCHIVE")]
     pub archives: Vec<PathBuf>,
-    /// Destination folder [default: a folder named after the archive, next to it].
-    /// With several archives, each one is extracted into this folder
+    /// Output.
     #[arg(short, long, value_name = "DIR")]
     pub output: Option<PathBuf>,
     #[command(flatten)]
@@ -209,16 +103,14 @@ pub struct Target {
 
 #[derive(Args)]
 pub struct Keep {
-    /// Keep the archive: extract without removing anything, like a standard
-    /// extraction. Free space is required for all extracted files
+    /// Keep the archive.
     #[arg(long)]
     pub keep_archive: bool,
 }
 
 #[derive(Args, Clone)]
 pub struct Secret {
-    /// Password for an encrypted archive. If omitted, HatchZip prompts for it
-    /// with hidden input, which is preferred: this value is visible to other programs
+    /// Password.
     #[arg(
         short,
         long,
@@ -231,9 +123,178 @@ pub struct Secret {
 
 #[derive(Args)]
 pub struct Space {
-    /// Disk space reserved during extraction, so the disk never fills completely
+    /// Reserved space.
     #[arg(long, value_name = "SIZE", default_value = "2GB", value_parser = parse_size)]
     pub keep_free: u64,
+}
+
+/// The long about, ending with what this build reads.
+fn long_about(lang: Lang) -> String {
+    let mut text = Key::CLI_LONG_ABOUT_BASE.text(lang).to_string();
+    text.push_str(if hatchzip_core::archive::RAR_SUPPORTED {
+        Key::CLI_LONG_ABOUT_RAR_TAIL.text(lang)
+    } else {
+        Key::CLI_LONG_ABOUT_NO_RAR_TAIL.text(lang)
+    });
+    text
+}
+
+/// Every help text, in the language in use.
+pub fn localized() -> clap::Command {
+    let lang = i18n::current();
+    let t = |k: Key| k.text(lang);
+    let mut cmd = Cli::command()
+        .about(t(Key::CLI_ABOUT))
+        .long_about(long_about(lang))
+        .after_long_help(t(Key::CLI_AFTER_LONG_HELP));
+
+    // Clap's own flags.
+    cmd = set_help(cmd, "quiet", Key::CLI_QUIET, lang);
+    cmd = set_help(cmd, "help", Key::CLI_HELP_FLAG, lang);
+    cmd = set_help(cmd, "version", Key::CLI_VERSION_FLAG, lang);
+
+    let extract = t(Key::CLI_EXTRACT_LONG).to_string();
+    cmd = cmd.mut_subcommand("extract", move |s| {
+        let s = s
+            .about(t(Key::CLI_EXTRACT_ABOUT))
+            .long_about(extract.clone());
+        let s = set_help(s, "archives", Key::CLI_ARCHIVE_ARG, lang);
+        let s = set_help(s, "output", Key::CLI_OUTPUT, lang);
+        let s = set_help(s, "password", Key::CLI_PASSWORD, lang);
+        let s = set_help(s, "keep_archive", Key::CLI_KEEP_ARCHIVE, lang);
+        let s = set_help(s, "verify_first", Key::CLI_VERIFY_FIRST, lang);
+        let s = set_help(s, "keep_free", Key::CLI_KEEP_FREE, lang);
+        let s = set_help(s, "yes", Key::CLI_YES, lang);
+        set_help(s, "help", Key::CLI_HELP_FLAG, lang)
+    });
+
+    cmd = cmd.mut_subcommand("check", move |s| {
+        let s = s.about(t(Key::CLI_CHECK_ABOUT));
+        let s = set_help(s, "archives", Key::CLI_ARCHIVE_ARG, lang);
+        let s = set_help(s, "output", Key::CLI_OUTPUT, lang);
+        let s = set_help(s, "password", Key::CLI_PASSWORD, lang);
+        let s = set_help(s, "keep_archive", Key::CLI_KEEP_ARCHIVE, lang);
+        let s = set_help(s, "keep_free", Key::CLI_KEEP_FREE, lang);
+        set_help(s, "help", Key::CLI_HELP_FLAG, lang)
+    });
+
+    for name in ["list", "test"] {
+        let about = if name == "list" {
+            Key::CLI_LIST_ABOUT
+        } else {
+            Key::CLI_TEST_ABOUT
+        };
+        cmd = cmd.mut_subcommand(name, move |s| {
+            let s = s.about(t(about));
+            let s = set_help(s, "archives", Key::CLI_ARCHIVE_ARG, lang);
+            let s = set_help(s, "password", Key::CLI_PASSWORD, lang);
+            set_help(s, "help", Key::CLI_HELP_FLAG, lang)
+        });
+    }
+
+    let restore = t(Key::CLI_RESTORE_LONG).to_string();
+    cmd = cmd.mut_subcommand("restore", move |s| {
+        let s = s
+            .about(t(Key::CLI_RESTORE_ABOUT))
+            .long_about(restore.clone());
+        let s = set_help(s, "archive", Key::CLI_RESTORE_ARCHIVE_ARG, lang);
+        set_help(s, "help", Key::CLI_HELP_FLAG, lang)
+    });
+
+    let completions = t(Key::CLI_COMPLETIONS_LONG).to_string();
+    cmd = cmd.mut_subcommand("completions", move |s| {
+        let s = s
+            .about(t(Key::CLI_COMPLETIONS_ABOUT))
+            .long_about(completions.clone());
+        let s = set_help(s, "shell", Key::CLI_SHELL_ARG, lang);
+        set_help(s, "help", Key::CLI_HELP_FLAG, lang)
+    });
+
+    let man = t(Key::CLI_MAN_LONG).to_string();
+    cmd.mut_subcommand("man", move |s| {
+        let s = s.about(t(Key::CLI_MAN_ABOUT)).long_about(man.clone());
+        set_help(s, "help", Key::CLI_HELP_FLAG, lang)
+    })
+}
+
+/// Replaces an argument's help, where the argument exists on this command.
+/// `mut_arg` panics on an unknown id, and not every subcommand takes every
+/// argument.
+fn set_help(cmd: clap::Command, id: &str, key: Key, lang: Lang) -> clap::Command {
+    if !cmd.get_arguments().any(|a| a.get_id().as_str() == id) {
+        return cmd;
+    }
+    let text = key.text(lang);
+    cmd.mut_arg(id, |a| a.help(text).long_help(text))
+}
+
+/// Prints the help in the language in use and says whether it did, so clap's
+/// own headings ("Usage:", "Commands:") never show through.
+pub fn print_help_if_asked(cmd: &clap::Command, argv: &[OsString]) -> bool {
+    let mut wanted = false;
+    let mut long = false;
+    for arg in argv.iter().skip(1) {
+        let text = arg.to_string_lossy();
+        if text == "--" {
+            break;
+        }
+        if text == "--help" {
+            wanted = true;
+            long = true;
+        } else if text == "-h" {
+            wanted = true;
+        }
+    }
+    if !wanted {
+        return false;
+    }
+    let sub = argv
+        .iter()
+        .skip(1)
+        .map(|a| a.to_string_lossy().into_owned())
+        .find(|a| !a.starts_with('-'))
+        .and_then(|name| cmd.find_subcommand(&name).cloned());
+    let mut target = match sub {
+        Some(s) => {
+            let name = s.get_name().to_string();
+            s.bin_name(format!("hatchzip {name}"))
+        }
+        None => cmd.clone(),
+    }
+    .color(clap::ColorChoice::Never);
+    let rendered = if long {
+        target.render_long_help()
+    } else {
+        target.render_help()
+    };
+    print!("{}", headings(&rendered.to_string()));
+    true
+}
+
+/// Clap's own section headings and its built-in flag texts, in Chinese.
+fn headings(text: &str) -> String {
+    if i18n::current() != Lang::Zh {
+        return text.to_string();
+    }
+    text.replace("Usage:", "用法:")
+        .replace("Commands:", "命令:")
+        .replace("Options:", "选项:")
+        .replace("Arguments:", "参数:")
+        .replace("[alias: ", "[别名: ")
+        .replace(
+            "Print help (see a summary with '-h')",
+            "显示帮助(用 '-h' 查看简要说明)",
+        )
+        .replace(
+            "Print help (see more with '--help')",
+            "显示帮助(用 '--help' 查看更多)",
+        )
+        .replace("Print help", "显示帮助")
+        .replace("Print version", "显示版本")
+        .replace(
+            "Print this message or the help of the given subcommand(s)",
+            "显示此信息或给定子命令的帮助",
+        )
 }
 
 /// Sizes like `500MB`, `2GB` or `1.5TB`, in powers of 1000 to match what
@@ -244,18 +305,30 @@ pub fn parse_size(s: &str) -> Result<u64, String> {
         .find(|c: char| !(c.is_ascii_digit() || c == '.'))
         .unwrap_or(s.len());
     let (num, unit) = s.split_at(split);
+    let lang = i18n::current();
     let num: f64 = num
         .parse()
-        .map_err(|_| format!("'{s}' is not a valid size, such as 500MB or 2GB"))?;
+        .map_err(|_| i18n::fill1(Key::CLI_INVALID_SIZE.text(lang), s))?;
     let mult = match unit.trim().to_ascii_uppercase().as_str() {
         "" | "B" => 1.0,
         "K" | "KB" => 1e3,
         "M" | "MB" => 1e6,
         "G" | "GB" => 1e9,
         "T" | "TB" => 1e12,
-        _ => return Err(format!("unknown unit in '{s}'. Use B, KB, MB, GB or TB")),
+        _ => {
+            return Err(i18n::fill1(Key::CLI_UNKNOWN_UNIT.text(lang), s));
+        }
     };
     Ok((num * mult) as u64)
+}
+
+/// Parses the command line against the localized command, so the help and
+/// every message are in the language in use.
+pub fn parse() -> Cli {
+    let argv: Vec<OsString> = std::env::args_os().collect();
+    let cmd = localized();
+    let matches = cmd.get_matches_from(argv);
+    Cli::from_arg_matches(&matches).expect("clap built this command line")
 }
 
 #[cfg(test)]
@@ -266,11 +339,14 @@ mod tests {
 
     #[test]
     fn command_line_is_well_formed() {
+        i18n::set_current(Lang::En);
         Cli::command().debug_assert();
+        localized().debug_assert();
     }
 
     #[test]
     fn sizes_parse() {
+        i18n::set_current(Lang::En);
         assert_eq!(parse_size("0"), Ok(0));
         assert_eq!(parse_size("500MB"), Ok(500_000_000));
         assert_eq!(parse_size("2gb"), Ok(2_000_000_000));

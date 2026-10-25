@@ -11,6 +11,7 @@ use clap::Parser;
 
 use hatchzip_gui::args::{Args, Launch};
 use hatchzip_gui::{APP_ID, backend, main_window, shell, task_window};
+use hatchzip_i18n::{self as i18n, Key, Lang};
 
 fn main() -> ExitCode {
     match run(Args::parse().launch()) {
@@ -23,6 +24,14 @@ fn main() -> ExitCode {
 }
 
 fn run(launch: Launch) -> Result<()> {
+    // The right-click entries are registered from here too, and carry the
+    // labels in the chosen language.
+    let lang = hatchzip_gui::settings::Settings::saved()
+        .lang
+        .as_deref()
+        .and_then(Lang::parse)
+        .unwrap_or_else(i18n::current);
+    i18n::set_current(lang);
     match launch {
         Launch::RegisterShell => {
             for place in shell::register()? {
@@ -32,7 +41,7 @@ fn run(launch: Launch) -> Result<()> {
         }
         Launch::UnregisterShell => {
             shell::unregister()?;
-            println!("Context menu entries removed.");
+            println!("{}", Key::NOTICE_MENU_REMOVED.text(i18n::current()));
             return Ok(());
         }
         _ => {}

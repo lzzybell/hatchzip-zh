@@ -52,6 +52,9 @@ pub fn sample_files() -> Files {
 pub fn hatchzip(args: &[&str], env: &[(&str, &str)]) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_hatchzip"));
     cmd.args(args);
+    // The suites assert the English wording; the machine running them may
+    // have a Chinese desktop. A test that cares sets its own value below.
+    cmd.env("HATCHZIP_LANG", "en");
     for (k, v) in env {
         cmd.env(k, v);
     }

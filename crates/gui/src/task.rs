@@ -7,10 +7,46 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use hatchzip_core::human;
+use hatchzip_core::session::SpacePlan;
+use hatchzip_i18n::{self as i18n, Key};
 
-use crate::text::{Rate, count, plan_view, reading_text};
+use crate::text::{Rate, count, entries, plan_view, reading_text};
 use crate::work::{Counters, Update};
 use crate::{Phase, PlanView, TaskView};
+
+/// What the last update said, kept so a language switch can say it again in
+/// the other language.
+enum Last {
+    None,
+    /// Does not fit; the message is the plan's verdict.
+    NoSpace,
+    Pausing,
+    VerifyBefore,
+    ProgressSaved,
+    Extracted {
+        keep: bool,
+    },
+    Tested {
+        entries: usize,
+    },
+    Restored {
+        entries: usize,
+        output: PathBuf,
+        kept: bool,
+    },
+    Failed {
+        message: String,
+        resumable: bool,
+    },
+}
+
+/// The line under a heading, kept the same way.
+enum Detail {
+    None,
+    Destination(PathBuf),
+    VerifyingTest,
+    Restoring,
+}
 
 pub struct Task {
     pub view: TaskView,
@@ -27,9 +63,13 @@ pub struct Task {
     rate: Rate,
     /// When the current check began, as the ticks saw it.
     checking_since: Option<Instant>,
+    /// The plan behind `plan`, kept so a language switch can redraw it.
+    plan_source: Option<SpacePlan>,
+    /// What the last update said, kept so a language switch can redraw it.
+    last: Last,
+    /// The line under the heading, kept the same way.
+    detail: Detail,
 }
-
-const CHECKING: &str = "Checking disk space…";
 
 /// Opening reads through the archive; a read this short doesn't need a
 /// number.
@@ -41,8 +81,8 @@ impl Task {
     pub fn restore(name: &str) -> Self {
         let mut task = Self::new(false, name);
         task.restoring = true;
-        task.view.detail =
-            "Converting it back to a standard archive. Extracted files are kept.".into();
+        task.detail = Detail::Restoring;
+        task.view.detail = task.detail_text().into();
         task.view.heading = task.heading().into();
         task
     }
@@ -60,7 +100,8 @@ impl Task {
 
     pub fn test(name: &str) -> Self {
         let mut task = Self::new(true, name);
-        task.view.detail = "Verifying every entry. No files are written.".into();
+        task.detail = Detail::VerifyingTest;
+        task.view.detail = task.detail_text().into();
         task
     }
 
@@ -69,7 +110,7 @@ impl Task {
             view: TaskView {
                 phase: Phase::Checking,
                 is_test,
-                busy: CHECKING.into(),
+                busy: Key::CHECKING_SPACE.text(i18n::current()).into(),
                 ..Default::default()
             },
             plan: PlanView::default(),
@@ -81,6 +122,9 @@ impl Task {
             keep: false,
             rate: Rate::default(),
             checking_since: None,
+            plan_source: None,
+            last: Last::None,
+            detail: Detail::None,
         };
         task.view.heading = task.heading().into();
         task
@@ -92,28 +136,105 @@ impl Task {
     }
 
     fn heading(&self) -> String {
+        let lang = i18n::current();
+        let key = |k: Key| k.text(lang);
         let n = &self.name;
         if self.restoring {
             return match self.view.phase {
-                Phase::Done => "Restore complete".to_string(),
-                Phase::Failed => "Restore failed".to_string(),
-                _ => format!("Restoring {n}"),
+                Phase::Done => key(Key::HEADING_RESTORE_COMPLETE).to_string(),
+                Phase::Failed => key(Key::HEADING_RESTORE_FAILED).to_string(),
+                _ => i18n::fill!(key(Key::HEADING_RESTORING), n),
             };
         }
         match (self.is_test, self.view.phase) {
-            (true, Phase::Done) => "Test complete".to_string(),
-            (true, Phase::Failed) => "Test failed".to_string(),
-            (true, _) => format!("Testing {n}"),
-            (false, Phase::Done) => "Extraction complete".to_string(),
-            (false, Phase::Paused) => "Extraction paused".to_string(),
-            (false, Phase::Failed) => "Extraction failed".to_string(),
-            (false, Phase::NoSpace) => "Insufficient disk space".to_string(),
-            (false, _) => format!("Extracting {n}"),
+            (true, Phase::Done) => key(Key::HEADING_TEST_COMPLETE).to_string(),
+            (true, Phase::Failed) => key(Key::HEADING_TEST_FAILED).to_string(),
+            (true, _) => i18n::fill!(key(Key::HEADING_TESTING), n),
+            (false, Phase::Done) => key(Key::HEADING_EXTRACTION_COMPLETE).to_string(),
+            (false, Phase::Paused) => key(Key::HEADING_EXTRACTION_PAUSED).to_string(),
+            (false, Phase::Failed) => key(Key::HEADING_EXTRACTION_FAILED).to_string(),
+            (false, Phase::NoSpace) => key(Key::HEADING_INSUFFICIENT_SPACE).to_string(),
+            (false, _) => i18n::fill!(key(Key::HEADING_EXTRACTING), n),
+        }
+    }
+
+    /// The line under the heading, in the language in use.
+    fn detail_text(&self) -> String {
+        let lang = i18n::current();
+        match &self.detail {
+            Detail::None => String::new(),
+            Detail::Destination(path) => {
+                i18n::fill!(Key::DETAIL_DESTINATION_PREFIX.text(lang), path.display())
+            }
+            Detail::VerifyingTest => Key::DETAIL_VERIFYING_TEST.text(lang).to_string(),
+            Detail::Restoring => Key::DETAIL_RESTORING.text(lang).to_string(),
+        }
+    }
+
+    /// The outcome line, in the language in use.
+    fn message(&self) -> String {
+        let lang = i18n::current();
+        let key = |k: Key| k.text(lang);
+        match &self.last {
+            Last::None => String::new(),
+            Last::NoSpace => self.plan.verdict.to_string(),
+            Last::Pausing => key(Key::MSG_PAUSING).to_string(),
+            Last::VerifyBefore => key(Key::MSG_VERIFY_BEFORE).to_string(),
+            Last::ProgressSaved => key(Key::MSG_PROGRESS_SAVED).to_string(),
+            Last::Extracted { keep: true } => key(Key::MSG_EXTRACTED_KEPT).to_string(),
+            Last::Extracted { keep: false } => key(Key::MSG_EXTRACTED_REMOVED).to_string(),
+            Last::Tested { entries: 1 } => key(Key::MSG_TEST_PASSED_ONE).to_string(),
+            Last::Tested { entries } => i18n::fill!(key(Key::MSG_TEST_PASSED), count(*entries)),
+            Last::Restored {
+                entries: _,
+                output,
+                kept: true,
+            } => i18n::fill!(key(Key::MSG_PROGRESS_DISCARDED), output.display()),
+            Last::Restored {
+                entries: n,
+                output,
+                kept: false,
+            } => {
+                i18n::fill!(
+                    key(Key::MSG_RESTORED),
+                    format!("the {}", entries(*n)),
+                    output.display()
+                )
+            }
+            Last::Failed {
+                message,
+                resumable: true,
+            } => i18n::fill!(key(Key::MSG_FAILED_RESUMABLE), message),
+            Last::Failed {
+                message,
+                resumable: false,
+            } => message.clone(),
+        }
+    }
+
+    /// Says everything again in the language now in use, for a switch while
+    /// a window is open.
+    pub fn relocalize(&mut self) {
+        if let Some(plan) = &self.plan_source {
+            self.plan = plan_view(plan);
+            self.view.space = i18n::fill!(
+                Key::ADDED_REQUIRED_AVAILABLE.text(i18n::current()),
+                human(plan.needed),
+                human(plan.free)
+            )
+            .into();
+        }
+        self.view.detail = self.detail_text().into();
+        self.view.message = self.message().into();
+        self.view.heading = self.heading().into();
+        if self.view.phase == Phase::Checking {
+            self.view.busy = Key::CHECKING_SPACE.text(i18n::current()).into();
         }
     }
 
     fn set_output(&mut self, output: &Path) {
-        self.view.detail = format!("Destination: {}", output.display()).into();
+        self.detail = Detail::Destination(output.to_path_buf());
+        self.view.detail = self.detail_text().into();
         self.output = Some(output.to_path_buf());
     }
 
@@ -132,7 +253,8 @@ impl Task {
             return false;
         }
         self.view.phase = Phase::Pausing;
-        self.view.message = "Pausing after the current batch…".into();
+        self.last = Last::Pausing;
+        self.view.message = self.message().into();
         true
     }
 
@@ -144,7 +266,8 @@ impl Task {
         match update {
             Update::Checking => {
                 v.phase = Phase::Checking;
-                v.busy = CHECKING.into();
+                self.last = Last::None;
+                v.busy = Key::CHECKING_SPACE.text(i18n::current()).into();
                 self.checking_since = None;
                 v.fraction = 0.0;
                 v.amounts = "".into();
@@ -155,24 +278,27 @@ impl Task {
             // The runner keeps the password; nothing to show.
             Update::Unlocked(_) => {}
             Update::Planned(plan) => {
-                self.plan = plan_view(&plan);
-                v.space = format!(
-                    "Required: {}. Available: {}.",
+                self.plan_source = Some(plan);
+                let plan = self.plan_source.as_ref().expect("just stored");
+                self.plan = plan_view(plan);
+                v.space = i18n::fill!(
+                    Key::ADDED_REQUIRED_AVAILABLE.text(i18n::current()),
                     human(plan.needed),
                     human(plan.free)
                 )
                 .into();
             }
             Update::NoSpace(plan) => {
-                self.plan = plan_view(&plan);
+                self.plan_source = Some(plan);
+                self.plan = plan_view(self.plan_source.as_ref().expect("just stored"));
                 v.phase = Phase::NoSpace;
-                v.message = self.plan.verdict.clone();
+                self.last = Last::NoSpace;
                 v.can_retry = true;
             }
             Update::Verifying => {
                 v.phase = Phase::Verifying;
                 if !self.is_test {
-                    v.message = "Verifying archive before extracting…".into();
+                    self.last = Last::VerifyBefore;
                 }
                 self.rate.clear();
             }
@@ -185,19 +311,14 @@ impl Task {
             Update::Paused => {
                 v.phase = Phase::Paused;
                 v.rate = "".into();
-                v.message = "Progress is saved. The extraction can be resumed now or later.".into();
+                self.last = Last::ProgressSaved;
             }
             Update::Extracted { output, keep } => {
                 v.phase = Phase::Done;
                 v.fraction = 1.0;
                 v.rate = "".into();
                 v.archive_left = "".into();
-                v.message = if keep {
-                    "All entries were extracted. The archive was kept."
-                } else {
-                    "All entries were extracted. The archive was removed."
-                }
-                .into();
+                self.last = Last::Extracted { keep };
                 v.can_open_folder = true;
                 self.set_output(&output);
             }
@@ -205,11 +326,7 @@ impl Task {
                 v.phase = Phase::Done;
                 v.fraction = 1.0;
                 v.rate = "".into();
-                v.message = match entries {
-                    1 => "Test passed: 1 entry verified.".to_string(),
-                    n => format!("Test passed: {} entries verified.", count(n)),
-                }
-                .into();
+                self.last = Last::Tested { entries };
             }
             Update::Restored {
                 entries,
@@ -222,41 +339,24 @@ impl Task {
                 v.rate = "".into();
                 v.archive_left = "".into();
                 v.space = "".into();
-                let held = match entries {
-                    1 => "the 1 entry".to_string(),
-                    n => format!("the {} entries", count(n)),
+                self.last = Last::Restored {
+                    entries,
+                    output: output.clone(),
+                    kept,
                 };
-                v.message = if kept {
-                    format!(
-                        "Extraction progress discarded. The archive was not modified. \
-                         Extracted files remain in {}.",
-                        output.display()
-                    )
-                } else {
-                    format!(
-                        "Archive restored. It contains {held} not yet extracted. Extracted \
-                         files remain in {}.",
-                        output.display()
-                    )
-                }
-                .into();
             }
             Update::Failed(f) => {
                 v.phase = Phase::Failed;
                 v.rate = "".into();
-                v.message = if f.resumable {
-                    format!(
-                        "{} Progress is saved; the extraction can be resumed.",
-                        f.message
-                    )
-                } else {
-                    f.message
-                }
-                .into();
+                self.last = Last::Failed {
+                    message: f.message,
+                    resumable: f.resumable,
+                };
                 v.can_retry = !self.is_test;
                 self.resumable = f.resumable;
             }
         }
+        self.view.message = self.message().into();
         self.view.heading = self.heading().into();
         // Half extracted and not running: the archive can be put back. A
         // kept archive was never taken apart.
@@ -275,7 +375,7 @@ impl Task {
                 Some(f) if f < 1.0 && now.duration_since(since) >= READING_AFTER => {
                     reading_text(f).into()
                 }
-                _ => CHECKING.into(),
+                _ => Key::CHECKING_SPACE.text(i18n::current()).into(),
             };
             return;
         }
@@ -290,11 +390,17 @@ impl Task {
         self.rate.add(now, done);
         let v = &mut self.view;
         v.fraction = (done as f64 / total as f64).min(1.0) as f32;
-        v.amounts = format!("{} of {}", human(done), human(total)).into();
+        v.amounts = i18n::fill!(
+            Key::AMOUNTS_LINE.text(i18n::current()),
+            human(done),
+            human(total)
+        )
+        .into();
         v.rate = self.rate.describe(total.saturating_sub(done)).into();
         if !self.is_test && !self.keep && v.phase != Phase::Verifying {
             let left = counters.archive.load(Ordering::Relaxed);
-            v.archive_left = format!("Archive remaining: {}", human(left)).into();
+            v.archive_left =
+                i18n::fill!(Key::ARCHIVE_REMAINING.text(i18n::current()), human(left)).into();
         }
     }
 }
@@ -307,6 +413,13 @@ mod tests {
 
     use super::*;
     use crate::work::Failure;
+    use hatchzip_i18n::Lang;
+
+    /// The tests assert the English wording; the person running them may
+    /// well have a Chinese desktop.
+    fn english() {
+        i18n::set_current(Lang::En);
+    }
 
     fn space(free: u64, needed: u64, keep_free: u64, normal: u64) -> SpacePlan {
         SpacePlan {
@@ -334,6 +447,7 @@ mod tests {
 
     #[test]
     fn an_extraction_runs_pauses_and_finishes() {
+        english();
         let mut t = Task::extract("game.zip", None, false);
         assert_eq!(t.view.phase, Phase::Checking);
         assert_eq!(t.view.heading, "Extracting game.zip");
@@ -396,6 +510,7 @@ mod tests {
     /// kept, whatever the run was asked: a resumed run reports its mode.
     #[test]
     fn keeping_the_archive_shows_no_countdown_and_no_restore() {
+        english();
         let mut t = Task::extract("game.zip", None, false);
         t.apply(working(true));
         let counters = Counters::default();
@@ -424,6 +539,7 @@ mod tests {
 
     #[test]
     fn a_long_open_says_how_far_it_has_read() {
+        english();
         // Keeping the archive opens it the same way.
         let mut t = Task::extract("data.tar.gz", None, true);
         assert_eq!(t.view.busy, "Checking disk space…");
@@ -453,6 +569,7 @@ mod tests {
 
     #[test]
     fn giving_the_archive_back_says_what_stays_where() {
+        english();
         let mut t = Task::restore("game.zip");
         assert_eq!(t.view.heading, "Restoring game.zip");
         t.apply(Update::Restored {
@@ -484,6 +601,7 @@ mod tests {
 
     #[test]
     fn no_space_offers_a_recheck() {
+        english();
         let mut t = Task::extract("game.zip", Some(Path::new("/games")), false);
         let mut plan = space(1_000_000_000, 5_000_000_000, 2_000_000_000, 9_000_000_000);
         plan.solid_block_bound = true;
@@ -500,6 +618,7 @@ mod tests {
 
     #[test]
     fn failures_say_whether_progress_is_kept() {
+        english();
         let mut t = Task::extract("game.zip", None, false);
         t.apply(Update::Failed(Failure {
             message: "Disk full.".into(),
@@ -524,6 +643,7 @@ mod tests {
 
     #[test]
     fn a_test_reports_entries_and_no_archive_size() {
+        english();
         let mut t = Task::test("game.7z");
         t.apply(Update::Verifying);
         let counters = Counters::default();

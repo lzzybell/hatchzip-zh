@@ -6,13 +6,17 @@ use std::time::{Duration, Instant};
 
 use hatchzip_core::human;
 use hatchzip_core::session::SpacePlan;
+use hatchzip_i18n::{self as i18n, Key, Lang};
 
 use crate::PlanView;
 
 /// What a long open says while it reads through the archive. Rounded down,
 /// so it never claims 100% before the read is done.
 pub fn reading_text(fraction: f64) -> String {
-    format!("Reading archive… {}%", (fraction * 100.0).floor() as u32)
+    i18n::fill!(
+        Key::READING_ARCHIVE.text(i18n::current()),
+        (fraction * 100.0).floor() as u32
+    )
 }
 
 /// `3412` as `3,412`.
@@ -28,24 +32,20 @@ pub fn count(n: usize) -> String {
     out
 }
 
-pub fn plural(n: usize, one: &str, many: &str) -> String {
-    format!("{} {}", count(n), if n == 1 { one } else { many })
+/// `1 entry`, `1,200 entries`, `1,200 个条目`.
+pub fn entries(n: usize) -> String {
+    let lang = i18n::current();
+    let word = match lang {
+        Lang::En if n == 1 => Key::ENTRY_ONE.text(Lang::En),
+        Lang::En => Key::ENTRY_MANY.text(Lang::En),
+        Lang::Zh => Key::ENTRY_MANY.text(Lang::Zh),
+    };
+    format!("{} {word}", count(n))
 }
 
 /// A time remaining, rounded to the unit that matters.
 pub fn duration(d: Duration) -> String {
-    let s = d.as_secs();
-    let unit = |n: u64, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
-    match s {
-        0..=4 => "less than 5 seconds".to_string(),
-        5..=59 => unit(s, "second", "seconds"),
-        60..=3599 => unit(s.div_ceil(60), "minute", "minutes"),
-        _ => format!(
-            "{} {}",
-            unit(s / 3600, "hour", "hours"),
-            unit((s % 3600) / 60, "minute", "minutes")
-        ),
-    }
+    i18n::duration(i18n::current(), d)
 }
 
 /// The "keep free" box takes gigabytes, like `2` or `0.5`.
@@ -69,46 +69,34 @@ pub fn gb_text(bytes: u64) -> String {
 }
 
 pub fn plan_view(plan: &SpacePlan) -> PlanView {
+    let lang = i18n::current();
+    let key = |k: Key| k.text(lang);
     let verdict = if plan.fits {
-        "Sufficient disk space".to_string()
+        key(Key::VERDICT_SUFFICIENT).to_string()
     } else {
         let short = plan.needed + plan.keep_free - plan.free;
-        format!(
-            "Insufficient disk space. {} more is required.",
-            human(short)
-        )
+        i18n::fill!(key(Key::VERDICT_SHORT), human(short))
     };
     let mut notes = Vec::new();
     // Whichever way was not chosen, when it would change the answer or
     // offers more. Only a fresh archive can still choose.
     if plan.either && plan.keep_archive && !plan.fits && plan.in_place_fits() {
-        notes.push(format!(
-            "Removing the archive during extraction requires only {}.",
+        notes.push(i18n::fill!(
+            key(Key::NOTE_REMOVE_ONLY),
             human(plan.in_place_needs)
         ));
     }
     if plan.either && !plan.keep_archive && plan.fits && plan.normal_fits() {
-        notes.push("There is also enough space to keep the archive.".to_string());
+        notes.push(key(Key::NOTE_KEEP_ENOUGH).to_string());
     }
     if !plan.fits && plan.solid_block_bound {
-        notes.push(
-            "Most of the required space is one solid block, which can only be released after \
-             it is fully extracted."
-                .to_string(),
-        );
+        notes.push(key(Key::NOTE_SOLID_BLOCK).to_string());
     }
     if !plan.reclaims && !plan.keep_archive {
-        notes.push(
-            "The destination is on another drive, so removing the archive does not free space there."
-                .to_string(),
-        );
+        notes.push(key(Key::NOTE_OTHER_DRIVE).to_string());
     }
     if plan.archive_kept_whole {
-        notes.push(
-            "This drive cannot release space inside a file, so the compressed archive remains \
-             whole until extraction completes."
-                .to_string(),
-        );
+        notes.push(key(Key::NOTE_KEPT_WHOLE).to_string());
     }
     let used = plan.needed + plan.keep_free;
     PlanView {
@@ -141,6 +129,13 @@ pub fn plan_view(plan: &SpacePlan) -> PlanView {
         } else {
             (used as f64 / plan.free as f64).min(1.0) as f32
         },
+        space_line: i18n::fill!(
+            key(Key::SPACE_LINE),
+            human(plan.free),
+            human(plan.needed),
+            human(plan.keep_free)
+        )
+        .into(),
     }
 }
 
@@ -185,13 +180,14 @@ impl Rate {
 
     /// "120.5 MB/s, 3 minutes remaining"
     pub fn describe(&self, left: u64) -> String {
+        let lang = i18n::current();
         match self.per_second() {
-            Some(r) if r >= 1.0 => format!(
-                "{}/s, {} remaining",
+            Some(r) if r >= 1.0 => i18n::fill!(
+                Key::RATE_LINE.text(lang),
                 human(r as u64),
                 duration(Duration::from_secs_f64(left as f64 / r))
             ),
-            Some(_) => "Waiting for disk".to_string(),
+            Some(_) => Key::WAITING_FOR_DISK.text(lang).to_string(),
             None => String::new(),
         }
     }
@@ -201,18 +197,26 @@ impl Rate {
 mod tests {
     use super::*;
 
+    /// The tests assert the English wording; the person running them may
+    /// well have a Chinese desktop.
+    fn english() {
+        i18n::set_current(Lang::En);
+    }
+
     #[test]
     fn counts_group_thousands() {
+        english();
         assert_eq!(count(0), "0");
         assert_eq!(count(999), "999");
         assert_eq!(count(1000), "1,000");
         assert_eq!(count(3_412_001), "3,412,001");
-        assert_eq!(plural(1, "file", "files"), "1 file");
-        assert_eq!(plural(1200, "file", "files"), "1,200 files");
+        assert_eq!(entries(1), "1 entry");
+        assert_eq!(entries(1200), "1,200 entries");
     }
 
     #[test]
     fn durations_round_like_people_do() {
+        english();
         assert_eq!(duration(Duration::from_secs(2)), "less than 5 seconds");
         assert_eq!(duration(Duration::from_secs(42)), "42 seconds");
         assert_eq!(duration(Duration::from_secs(60)), "1 minute");
@@ -238,6 +242,7 @@ mod tests {
 
     #[test]
     fn rate_needs_a_second_of_history() {
+        english();
         let mut rate = Rate::default();
         let t = Instant::now();
         rate.add(t, 0);
@@ -296,6 +301,7 @@ mod tests {
 
     #[test]
     fn the_other_way_is_mentioned_when_it_matters() {
+        english();
         // Room for 4 GB: in place needs 3 GB, keeping needs 6 GB.
         let tight = plan(6_000_000_000, 3_000_000_000, 2_000_000_000);
         let v = plan_view(&kept(tight));
@@ -336,6 +342,7 @@ mod tests {
 
     #[test]
     fn plans_read_plainly() {
+        english();
         let fits = plan_view(&plan(10_000_000_000, 3_000_000_000, 2_000_000_000));
         assert!(fits.fits);
         assert_eq!(fits.verdict, "Sufficient disk space");
@@ -344,6 +351,10 @@ mod tests {
         assert_eq!(fits.normal, "6.0 GB");
         assert_eq!(fits.note, "There is also enough space to keep the archive.");
         assert!((fits.meter - 0.5).abs() < 1e-6);
+        assert_eq!(
+            fits.space_line,
+            "Available: 10.0 GB. Required: 3.0 GB, plus 2.0 GB reserved."
+        );
 
         let mut tight = plan(4_000_000_000, 3_000_000_000, 2_000_000_000);
         tight.solid_block_bound = true;

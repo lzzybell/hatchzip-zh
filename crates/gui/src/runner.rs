@@ -90,6 +90,15 @@ impl Runner {
         self.start(Task::restore(&name), Request::Restore { archive });
     }
 
+    /// Says the current task again in the language now in use.
+    pub fn relocalize(&self) {
+        let mut task = self.task.borrow_mut();
+        if let Some(t) = task.as_mut() {
+            t.relocalize();
+            (self.show)(t);
+        }
+    }
+
     pub fn running(&self) -> bool {
         self.task.borrow().as_ref().is_some_and(Task::running)
     }

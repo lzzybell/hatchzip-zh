@@ -10,34 +10,42 @@ mod platform;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use hatchzip_i18n::{Key, Lang};
 
 pub struct Action {
     /// Stable identifier, used in file and registry key names.
     pub id: &'static str,
-    pub label: &'static str,
+    /// The label, in every language.
+    pub key: Key,
     /// The GUI's flags, put before the archive paths.
     pub flag: &'static str,
+}
+
+impl Action {
+    pub fn label(&self, lang: Lang) -> &'static str {
+        self.key.text(lang)
+    }
 }
 
 pub const ACTIONS: &[Action] = &[
     Action {
         id: "extract-here",
-        label: "Extract here",
+        key: Key::SHELL_EXTRACT_HERE,
         flag: "--extract-here",
     },
     Action {
         id: "extract-here-keep",
-        label: "Extract here (keep archive)",
+        key: Key::SHELL_EXTRACT_HERE_KEEP,
         flag: "--keep-archive --extract-here",
     },
     Action {
         id: "extract-to",
-        label: "Extract to a new folder",
+        key: Key::SHELL_EXTRACT_TO,
         flag: "--extract-to",
     },
     Action {
         id: "test",
-        label: "Test archive",
+        key: Key::SHELL_TEST,
         flag: "--test",
     },
 ];

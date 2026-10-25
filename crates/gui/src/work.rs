@@ -14,6 +14,7 @@ use hatchzip_core::archive::{PasswordNeeded, WrongPassword};
 use hatchzip_core::engine::{self, Job, Outcome, Progress, Run};
 use hatchzip_core::journal::{Journal, Paths};
 use hatchzip_core::session::{self, SpacePlan, State};
+use hatchzip_i18n::{self as i18n, Key};
 
 #[derive(Default)]
 pub struct Counters {
@@ -169,8 +170,8 @@ pub fn run(request: &Request, counters: &Arc<Counters>, send: &dyn Fn(Update), a
         let message = if e.is::<PasswordNeeded>() || e.is::<WrongPassword>() {
             // Only reached when the person closed the password prompt.
             match request {
-                Request::Test { .. } => "Test cancelled. The archive was not modified.",
-                _ => "Extraction cancelled. The archive was not modified.",
+                Request::Test { .. } => Key::MSG_CANCELLED_TEST.text(i18n::current()),
+                _ => Key::MSG_CANCELLED_EXTRACT.text(i18n::current()),
             }
             .to_string()
         } else {
@@ -267,10 +268,7 @@ fn extract(
         }
         State::Fresh(job, out) => {
             if !keep_archive && let Some(why) = job.in_place_refusal() {
-                anyhow::bail!(
-                    "{why}. Turn off \"Remove the archive during extraction\" to extract it and \
-                     keep the archive"
-                );
+                anyhow::bail!(i18n::fill!(Key::REFUSAL_KEEP.text(i18n::current()), why));
             }
             let plan = session::plan(&job, &out, false, keep_free, keep_archive)?;
             if !plan.fits {
@@ -279,8 +277,7 @@ fn extract(
             }
             send(Update::Planned(plan));
             if verify_first {
-                verify(&job, counters, send)
-                    .context("the archive is damaged; no files were extracted")?;
+                verify(&job, counters, send).context(Key::CLI_DAMAGED.text(i18n::current()))?;
                 if counters.stop.load(Ordering::Relaxed) {
                     send(Update::Paused);
                     return Ok(());
@@ -342,11 +339,9 @@ fn test(
     let (primary, paths) = session::locate(archive)?;
     let job = match open(&primary, &paths, None, false, secret, counters, send)? {
         State::Fresh(job, _) => job,
-        _ => bail!(
-            "this archive is partially extracted and cannot be tested. Resume or restore it first"
-        ),
+        _ => bail!(Key::MSG_PARTIAL_TEST.text(i18n::current())),
     };
-    verify(&job, counters, send).context("the archive is damaged")?;
+    verify(&job, counters, send).context(Key::CLI_DAMAGED.text(i18n::current()))?;
     send(Update::Tested(job.item_count()));
     Ok(())
 }

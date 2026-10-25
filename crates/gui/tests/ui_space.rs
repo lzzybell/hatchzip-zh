@@ -88,6 +88,12 @@ fn shot(window: &slint::Window, name: &str) {
 
 #[test]
 fn keeping_does_not_fit_but_removing_does() {
+    // English unless HATCHZIP_TEST_LANG asks for a screenshot in Chinese.
+    let lang = std::env::var("HATCHZIP_TEST_LANG")
+        .ok()
+        .and_then(|v| hatchzip_i18n::Lang::parse(&v))
+        .unwrap_or(hatchzip_i18n::Lang::En);
+    hatchzip_i18n::set_current(lang);
     let dirs = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
     let archives: Vec<PathBuf> = dirs.iter().map(|d| make_zip(d.path())).collect();
     let (normal, in_place) = {

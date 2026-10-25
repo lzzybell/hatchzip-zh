@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use hatchzip_core::session;
+use hatchzip_i18n::{self as i18n, Lang};
 use slint::{CloseRequestResponse, ComponentHandle};
 
 use crate::TaskWindow;
@@ -75,7 +76,14 @@ fn job_for(
 /// The window, shown, and the function that starts the task. Nothing
 /// touches an archive until that is called.
 pub fn build(args: TaskArgs, settings: Settings) -> Result<(TaskWindow, impl FnOnce() + 'static)> {
+    let lang = settings
+        .lang
+        .as_deref()
+        .and_then(Lang::parse)
+        .unwrap_or_else(i18n::current);
+    i18n::set_current(lang);
     let ui = TaskWindow::new()?;
+    crate::strings::apply_task(&ui, lang);
     let jobs: Vec<(Task, Request)> = args
         .archives
         .iter()

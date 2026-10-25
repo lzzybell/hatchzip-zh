@@ -615,6 +615,9 @@ fn task_window_states(scheme: ColorScheme, tag: &str) {
 #[test]
 fn windows_end_to_end() {
     let data = tempfile::tempdir().unwrap();
+    // The windows are asserted in English; the machine running the tests may
+    // have a Chinese desktop.
+    hatchzip_i18n::set_current(hatchzip_i18n::Lang::En);
     let linux = std::env::consts::OS == "linux";
     if linux {
         // SAFETY: no other thread exists yet in this one-test binary.

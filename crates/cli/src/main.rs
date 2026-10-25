@@ -10,12 +10,12 @@ use std::time::Duration;
 use anstream::{eprintln, print, println};
 use anstyle::{AnsiColor, Style};
 use anyhow::{Context, Result, bail};
-use clap::{CommandFactory, Parser};
+use hatchzip_i18n::{self as i18n, Key};
 use indicatif::{ProgressBar, ProgressStyle};
 
 use cli::{
-    Cli, Command, EXIT_DAMAGED, EXIT_FAILURE, EXIT_NO_SPACE, EXIT_PASSWORD, EXIT_PAUSED, Secret,
-    Space, Target,
+    Command, EXIT_DAMAGED, EXIT_FAILURE, EXIT_NO_SPACE, EXIT_PASSWORD, EXIT_PAUSED, Secret, Space,
+    Target,
 };
 use hatchzip_core::archive::storage::Reads;
 use hatchzip_core::archive::{Damaged, Kind, PasswordNeeded, WrongPassword};
@@ -42,7 +42,12 @@ macro_rules! say {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    // Help is printed here so its headings read in the language in use.
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    if cli::print_help_if_asked(&cli::localized(), &argv) {
+        return ExitCode::SUCCESS;
+    }
+    let cli = cli::parse();
     QUIET.store(cli.quiet, Ordering::Relaxed);
     let code = match run(cli.command) {
         Ok(code) => code,
@@ -53,10 +58,13 @@ fn main() -> ExitCode {
 
 /// Prints an error and returns the exit status it calls for.
 fn fail(e: &anyhow::Error) -> u8 {
-    eprintln!("{ERROR}error:{ERROR:#} {e:#}");
+    eprintln!(
+        "{ERROR}{}{ERROR:#} {e:#}",
+        Key::CLI_ERROR.text(i18n::current())
+    );
     if e.is::<PasswordNeeded>() || e.is::<WrongPassword>() {
         if !io::stdin().is_terminal() {
-            eprintln!("Pass --password or set HATCHZIP_PASSWORD when not running in a terminal.");
+            eprintln!("{}", Key::CLI_PASSWORD_NO_TTY.text(i18n::current()));
         }
         EXIT_PASSWORD
     } else if e.is::<Damaged>() {
@@ -92,22 +100,27 @@ fn open(
                 r.finish();
             }
             if wrong {
-                eprintln!("{ERROR}Incorrect password.{ERROR:#}");
+                eprintln!(
+                    "{ERROR}{}{ERROR:#}",
+                    Key::CLI_INCORRECT_PASSWORD.text(i18n::current())
+                );
             }
             tries += 1;
             if tries > 3 || !io::stdin().is_terminal() {
                 return None;
             }
-            rpassword::prompt_password("Password: ").ok()
+            rpassword::prompt_password(Key::CLI_PASSWORD_PROMPT.text(i18n::current())).ok()
         },
         |file, size| {
             // Small files decode in a moment; say nothing then.
             if size >= 64 << 20 && !QUIET.load(Ordering::Relaxed) {
                 eprintln!(
-                    "Checking the password by decoding '{}' ({}). This archive has no password \
-                     check value, so this may take a while.",
-                    file.display(),
-                    human(size)
+                    "{}",
+                    i18n::fill2(
+                        Key::CLI_CHECKING_PASSWORD.text(i18n::current()),
+                        file.display(),
+                        human(size)
+                    )
                 );
             }
         },
@@ -154,7 +167,7 @@ impl Reading {
                             .expect("valid template")
                             .progress_chars("=> "),
                         );
-                        b.set_prefix("Reading");
+                        b.set_prefix(Key::CLI_READING_BAR.text(i18n::current()));
                         b.enable_steady_tick(Duration::from_millis(200));
                         bar = Some(b);
                     }
@@ -201,7 +214,10 @@ fn run(command: Command) -> Result<u8> {
             let archives = distinct(&archives)?;
             let code = each(&archives, true, |a| test_command(a, secret.clone()));
             if archives.len() > 1 && code == 0 {
-                say!("{GOOD}All {} archives passed.{GOOD:#}", archives.len());
+                say!(
+                    "{GOOD}{}{GOOD:#}",
+                    i18n::fill1(Key::CLI_ALL_TESTED.text(i18n::current()), archives.len())
+                );
             }
             Ok(code)
         }
@@ -218,11 +234,11 @@ fn run(command: Command) -> Result<u8> {
                 })
                 .filter(|n| n == "hz")
                 .unwrap_or_else(|| "hatchzip".into());
-            clap_complete::generate(shell, &mut Cli::command(), name, &mut io::stdout());
+            clap_complete::generate(shell, &mut cli::localized(), name, &mut io::stdout());
             Ok(0)
         }
         Command::Man => {
-            clap_mangen::Man::new(Cli::command()).render(&mut io::stdout())?;
+            clap_mangen::Man::new(cli::localized()).render(&mut io::stdout())?;
             Ok(0)
         }
     }
@@ -272,79 +288,87 @@ fn report(
     keep_free: u64,
     keep: bool,
 ) -> Result<bool> {
+    let lang = i18n::current();
     let plan = session::plan(job, out, journal.is_some(), keep_free, keep)?;
     let left = job.remaining_size();
 
     say!(
-        "{BOLD}{}{BOLD:#}  {} {}, {} uncompressed in {}",
+        "{BOLD}{}{BOLD:#}  {} {}, {}",
         display_name(job),
         human(job.storage.original_len()),
         job.format_name,
-        human(journal.map_or(left, |j| j.total_size)),
-        entries(job.item_count())
+        i18n::fill2(
+            Key::CLI_REPORT_SIZE.text(lang),
+            human(journal.map_or(left, |j| j.total_size)),
+            entries(job.item_count())
+        )
     );
     if let Some(j) = journal {
         say!(
-            "  resuming: {} of {} remaining",
-            human(left),
-            human(j.total_size)
+            "{}",
+            i18n::fill2(
+                Key::CLI_RESUMING.text(lang),
+                human(left),
+                human(j.total_size)
+            )
         );
     }
-    say!("  available                    {}", human(plan.free));
+    say!(
+        "{}",
+        i18n::fill1(Key::CLI_AVAILABLE_LINE.text(lang), human(plan.free))
+    );
     if plan.keep_archive {
         say!(
-            "  required                     {BOLD}{}{BOLD:#} {DIM}(+{} reserved){DIM:#}",
-            human(plan.needed),
-            human(plan.keep_free)
+            "{}",
+            i18n::fill2(
+                Key::CLI_REQUIRED_LINE.text(lang),
+                human(plan.needed),
+                human(plan.keep_free)
+            )
         );
-        say!(
-            "  {DIM}note: the archive is kept, so space is required for all extracted files{DIM:#}"
-        );
+        say!("{DIM}{}{DIM:#}", Key::CLI_NOTE_KEPT.text(lang));
     } else {
         say!(
-            "  standard extraction needs    {}",
-            human(plan.normal_needs)
+            "{}",
+            i18n::fill1(Key::CLI_STANDARD_NEEDS.text(lang), human(plan.normal_needs))
         );
         say!(
-            "  required                     {BOLD}{}{BOLD:#} {DIM}(+{} reserved){DIM:#}",
-            human(plan.needed),
-            human(plan.keep_free)
+            "{}",
+            i18n::fill2(
+                Key::CLI_REQUIRED_LINE.text(lang),
+                human(plan.needed),
+                human(plan.keep_free)
+            )
         );
         if !plan.reclaims {
-            say!(
-                "  {DIM}note: the destination is on another drive, so removing the archive does not free space there{DIM:#}"
-            );
+            say!("{DIM}{}{DIM:#}", Key::CLI_NOTE_OTHER_DRIVE.text(lang));
         }
         if plan.archive_kept_whole {
-            say!(
-                "  {DIM}note: this drive cannot release space inside a file, so the compressed archive remains whole until extraction completes and room is required for the archive and every extracted file{DIM:#}"
-            );
+            say!("{DIM}{}{DIM:#}", Key::CLI_NOTE_KEPT_WHOLE.text(lang));
         }
     }
     if plan.fits {
-        say!("  available after              {}", human(plan.free_after));
+        say!(
+            "{}",
+            i18n::fill1(Key::CLI_AVAILABLE_AFTER.text(lang), human(plan.free_after))
+        );
         if !plan.keep_archive && plan.either && plan.normal_fits() {
-            say!(
-                "  {DIM}note: there is also enough space to keep the archive (--keep-archive){DIM:#}"
-            );
+            say!("{DIM}{}{DIM:#}", Key::CLI_NOTE_KEEP_ENOUGH.text(lang));
         }
     } else {
         let short = human(plan.needed + plan.keep_free - plan.free);
         println!(
-            "{ERROR}Insufficient disk space:{ERROR:#} {short} more is required. Free up space or lower --keep-free."
+            "{ERROR}{}{ERROR:#}",
+            i18n::fill1(Key::CLI_INSUFFICIENT.text(lang), short)
         );
         if plan.keep_archive && plan.either && plan.in_place_fits() {
             println!(
-                "Without --keep-archive, the archive is removed during extraction and only {} is required.",
-                human(plan.in_place_needs)
+                "{}",
+                i18n::fill1(Key::CLI_WITHOUT_KEEP.text(lang), human(plan.in_place_needs))
             );
         }
         if plan.solid_block_bound {
-            println!(
-                "{DIM}Most of the required space is one solid block, which can only be released after \
-                 it is fully extracted. Archives created with smaller solid blocks require much \
-                 less space.{DIM:#}"
-            );
+            println!("{DIM}{}{DIM:#}", Key::CLI_SOLID_NOTE.text(lang));
         }
     }
     Ok(plan.fits)
@@ -364,9 +388,8 @@ fn check_all(target: Target, keep: bool, space: Space) -> Result<u8> {
     if archives.len() > 1 {
         say!();
         say!(
-            "{DIM}Each archive is checked against the space available now. Extracting one changes \
-             the space available for the next; extract checks each one again just before it \
-             starts.{DIM:#}"
+            "{DIM}{}{DIM:#}",
+            Key::CLI_CHECK_MULTI_NOTE.text(i18n::current())
         );
     }
     Ok(code)
@@ -390,7 +413,7 @@ fn check(
             report(&job, &journal.output, Some(&journal), space.keep_free, keep)?
         }
         State::Orphan(_) => {
-            say!("All entries are already extracted. Run extract to complete the cleanup.");
+            say!("{}", Key::CLI_ORPHAN_CHECK.text(i18n::current()));
             true
         }
     };
@@ -402,8 +425,8 @@ fn check(
 fn in_place_possible(job: &Job, keep: bool) -> Result<()> {
     match job.in_place_refusal() {
         Some(why) if !keep => bail!(
-            "{why}. Run the command again with --keep-archive to extract it and keep the archive, \
-             or extract it with another program"
+            "{}",
+            i18n::fill1(Key::CLI_REFUSAL_KEEP.text(i18n::current()), why)
         ),
         _ => Ok(()),
     }
@@ -414,24 +437,38 @@ fn list(archive: &Path, secret: Secret) -> Result<u8> {
         State::Fresh(job, _) | State::Resume(job, _) => job,
         State::Orphan(_) => bail!("no entries remain in this archive"),
     };
-    println!("{BOLD}{:>10}  Name{BOLD:#}", "Size");
+    println!(
+        "{BOLD}{}{BOLD:#}",
+        Key::CLI_LIST_HEADER.text(i18n::current())
+    );
     for item in job.units.iter().rev().flat_map(|u| &u.items) {
         let path = item.path.display();
         match &item.kind {
             Kind::Dir => println!("{:>10}  {path}/", ""),
             Kind::File => println!("{:>10}  {path}", human(item.size)),
-            Kind::Symlink => println!("{:>10}  {path} {DIM}(symlink){DIM:#}", ""),
+            Kind::Symlink => println!(
+                "{:>10}  {path} {DIM}{}{DIM:#}",
+                "",
+                Key::CLI_LIST_SYMLINK.text(i18n::current())
+            ),
             Kind::HardLink(t) => {
-                println!("{:>10}  {path} {DIM}(link to {}){DIM:#}", "", t.display())
+                println!(
+                    "{:>10}  {path} {DIM}{}{DIM:#}",
+                    "",
+                    i18n::fill1(Key::CLI_LIST_LINK.text(i18n::current()), t.display())
+                )
             }
         }
     }
     say!(
-        "{DIM}{}, {} uncompressed, {} {} archive{DIM:#}",
-        entries(job.item_count()),
-        human(job.remaining_size()),
-        human(job.storage.original_len()),
-        job.format_name
+        "{DIM}{}{DIM:#}",
+        i18n::fill4(
+            Key::CLI_LIST_FOOTER.text(i18n::current()),
+            entries(job.item_count()),
+            human(job.remaining_size()),
+            human(job.storage.original_len()),
+            job.format_name
+        )
     );
     Ok(0)
 }
@@ -439,26 +476,28 @@ fn list(archive: &Path, secret: Secret) -> Result<u8> {
 fn test_command(archive: &Path, secret: Secret) -> Result<u8> {
     let job = match open(archive, None, false, secret)?.0 {
         State::Fresh(job, _) => job,
-        _ => bail!(
-            "this archive is partially extracted and cannot be tested. Run extract to resume it, or restore to undo it"
-        ),
+        _ => bail!("{}", Key::CLI_PARTIAL_TEST.text(i18n::current())),
     };
     if let Err(e) = verify(&job) {
         eprintln!("{ERROR}error:{ERROR:#} {e:#}");
         return Ok(EXIT_DAMAGED);
     }
     say!(
-        "{GOOD}Test passed:{GOOD:#} {} verified.",
-        entries(job.item_count())
+        "{GOOD}{}{GOOD:#}",
+        i18n::fill1(
+            Key::CLI_TEST_PASSED.text(i18n::current()),
+            entries(job.item_count())
+        )
     );
     Ok(0)
 }
 
 fn entries(n: usize) -> String {
+    let lang = i18n::current();
     if n == 1 {
-        "1 entry".into()
+        Key::CLI_ENTRIES_ONE.text(lang).to_string()
     } else {
-        format!("{n} entries")
+        i18n::fill1(Key::CLI_ENTRIES_MANY.text(lang), n)
     }
 }
 
@@ -466,16 +505,28 @@ fn restore(archive: &Path) -> Result<u8> {
     let r = hatchzip_core::restore::restore(archive)?;
     let name = r.archive.file_name().unwrap_or_default().to_string_lossy();
     if r.kept {
-        say!("{GOOD}Extraction progress discarded.{GOOD:#} {name} was kept and was not modified.");
+        say!(
+            "{GOOD}{}{GOOD:#}",
+            i18n::fill1(Key::CLI_RESTORE_KEPT.text(i18n::current()), &name)
+        );
     } else {
         say!(
-            "{GOOD}Archive restored.{GOOD:#} {name} is a standard {} archive again and contains \
-             the {} not yet extracted.",
-            r.format,
-            entries(r.entries)
+            "{GOOD}{}{GOOD:#}",
+            i18n::fill3(
+                Key::CLI_RESTORE_DONE.text(i18n::current()),
+                &name,
+                r.format,
+                entries(r.entries)
+            )
         );
     }
-    say!("Extracted files remain in {}.", r.output.display());
+    say!(
+        "{}",
+        i18n::fill1(
+            Key::CLI_FILES_REMAIN.text(i18n::current()),
+            r.output.display()
+        )
+    );
     Ok(0)
 }
 
@@ -520,7 +571,10 @@ fn extract_all(
             // A run that ended just before its cleanup has a journal left.
             let (primary, paths) = locate(a)?;
             if !primary.exists() && !paths.exists() {
-                bail!("{} does not exist. No archive was extracted", a.display());
+                bail!(
+                    "{}",
+                    i18n::fill1(Key::CLI_NOT_FOUND.text(i18n::current()), a.display())
+                );
             }
         }
     }
@@ -529,10 +583,7 @@ fn extract_all(
         if STOP.swap(true, Ordering::Relaxed) {
             std::process::exit(EXIT_PAUSED.into());
         }
-        eprintln!(
-            "\nPausing after the current batch. Partly written files are redone on resume. \
-             Press Ctrl+C again to exit immediately."
-        );
+        eprintln!("\n{}", Key::CLI_PAUSE_NOTE.text(i18n::current()));
     })
     .context("installing Ctrl+C handler")?;
 
@@ -543,9 +594,12 @@ fn extract_all(
                 say!();
             }
             say!(
-                "{BOLD}Archive {} of {}:{BOLD:#} {}",
-                i + 1,
-                archives.len(),
+                "{BOLD}{}{BOLD:#} {}",
+                i18n::fill2(
+                    Key::CLI_ARCHIVE_N_OF.text(i18n::current()),
+                    i + 1,
+                    archives.len()
+                ),
                 archive.display()
             );
         }
@@ -568,7 +622,10 @@ fn extract_all(
     }
     if opts.several {
         say!();
-        say!("{GOOD}All {} archives extracted.{GOOD:#}", archives.len());
+        say!(
+            "{GOOD}{}{GOOD:#}",
+            i18n::fill1(Key::CLI_ALL_EXTRACTED.text(i18n::current()), archives.len())
+        );
     }
     Ok(0)
 }
@@ -576,30 +633,29 @@ fn extract_all(
 /// What a run of several archives did, after `archives[done]` stopped it.
 /// Shown even under `--quiet`, since it is the answer to what happened.
 fn summary(archives: &[PathBuf], done: usize, code: u8, saved: bool) {
+    let lang = i18n::current();
     let stopped = if code == EXIT_PAUSED {
-        "paused"
+        Key::CLI_STATE_PAUSED.text(lang)
     } else {
-        "not extracted"
+        Key::CLI_STATE_NOT_EXTRACTED.text(lang)
     };
     println!();
     println!(
-        "{ERROR}Stopped at archive {} of {}.{ERROR:#}",
-        done + 1,
-        archives.len()
+        "{ERROR}{}{ERROR:#}",
+        i18n::fill2(Key::CLI_STOPPED.text(lang), done + 1, archives.len())
     );
     for (i, a) in archives.iter().enumerate() {
         let state = match i.cmp(&done) {
-            std::cmp::Ordering::Less => "extracted",
-            std::cmp::Ordering::Equal if saved => &format!("{stopped}, progress saved"),
-            std::cmp::Ordering::Equal => stopped,
-            std::cmp::Ordering::Greater => "not started",
+            std::cmp::Ordering::Less => Key::CLI_STATE_EXTRACTED.text(lang).to_string(),
+            std::cmp::Ordering::Equal if saved => {
+                i18n::fill1(Key::CLI_STATE_SAVED.text(lang), stopped)
+            }
+            std::cmp::Ordering::Equal => stopped.to_string(),
+            std::cmp::Ordering::Greater => Key::CLI_STATE_NOT_STARTED.text(lang).to_string(),
         };
         println!("  {}  {DIM}({state}){DIM:#}", a.display());
     }
-    println!(
-        "To continue, run extract again with the archives that are not extracted. An archive \
-         with saved progress resumes where it stopped."
-    );
+    println!("{}", Key::CLI_CONTINUE.text(lang));
 }
 
 fn extract(
@@ -626,15 +682,18 @@ fn extract(
         State::Orphan(journal) => {
             engine::finish_orphaned(&journal, &paths)?;
             say!(
-                "{GOOD}Extraction complete.{GOOD:#} Files are in {}.",
-                journal.output.display()
+                "{GOOD}{}{GOOD:#}",
+                i18n::fill1(
+                    Key::CLI_ORPHAN_DONE.text(i18n::current()),
+                    journal.output.display()
+                )
             );
             return Ok(Ended::Extracted);
         }
         State::Resume(job, journal) => {
             let keep = session::keeps_archive(&journal, opts.keep)?;
             if keep && !opts.keep {
-                say!("This extraction was started with --keep-archive; the archive is kept.");
+                say!("{}", Key::CLI_RESUME_KEEP_NOTE.text(i18n::current()));
             }
             if !report(&job, &journal.output, Some(&journal), keep_free, keep)? {
                 return Ok(Ended::Stopped {
@@ -670,10 +729,13 @@ fn extract(
     };
 
     let keep = journal.keep;
-    let bar = progress_bar(journal.total_size, "Extracting");
+    let bar = progress_bar(journal.total_size, Key::CLI_EXTRACTING_BAR);
     bar.set_position(journal.total_size - job.remaining_size());
     if !keep {
-        bar.set_message(format!("archive: {}", human(journal.committed_len)));
+        bar.set_message(i18n::fill1(
+            Key::CLI_ARCHIVE_PROGRESS.text(i18n::current()),
+            human(journal.committed_len),
+        ));
     }
 
     let output = journal.output.clone();
@@ -686,7 +748,12 @@ fn extract(
         stop: &STOP,
         progress: Progress {
             on_bytes: Box::new(move |n| b1.inc(n)),
-            on_commit: Box::new(move |len| b2.set_message(format!("archive: {}", human(len)))),
+            on_commit: Box::new(move |len| {
+                b2.set_message(i18n::fill1(
+                    Key::CLI_ARCHIVE_PROGRESS.text(i18n::current()),
+                    human(len),
+                ))
+            }),
         },
         keep_free,
     };
@@ -696,20 +763,24 @@ fn extract(
     match outcome {
         Ok(Outcome::Finished) => {
             let archive = if keep {
-                "The archive was kept."
+                Key::CLI_EXTRACT_KEPT.text(i18n::current())
             } else {
-                "The archive was removed."
+                Key::CLI_EXTRACT_REMOVED.text(i18n::current())
             };
             say!(
-                "{GOOD}Extraction complete:{GOOD:#} {} in {}. {archive}",
-                entries(count),
-                output.display()
+                "{GOOD}{}{GOOD:#}",
+                i18n::fill3(
+                    Key::CLI_EXTRACT_DONE.text(i18n::current()),
+                    entries(count),
+                    output.display(),
+                    archive
+                )
             );
             Ok(Ended::Extracted)
         }
         Ok(Outcome::Paused) => {
             if !opts.several {
-                say!("Extraction paused. Run the same command to resume.");
+                say!("{}", Key::CLI_PAUSED.text(i18n::current()));
             }
             Ok(Ended::Stopped {
                 code: EXIT_PAUSED,
@@ -719,7 +790,7 @@ fn extract(
         Err(e) => {
             eprintln!("{ERROR}error:{ERROR:#} {e:#}");
             if !opts.several {
-                eprintln!("Progress is saved. Run the same command to resume.");
+                eprintln!("{}", Key::CLI_PROGRESS_SAVED.text(i18n::current()));
             }
             // A file whose password differs from the one proven at the
             // start, possible in RAR 4, is still a password problem.
@@ -733,34 +804,35 @@ fn extract(
 }
 
 fn verify(job: &Job) -> Result<()> {
-    let bar = progress_bar(job.remaining_size(), "Verifying");
+    let bar = progress_bar(job.remaining_size(), Key::CLI_VERIFYING_BAR);
     let b = bar.clone();
     let result = job.verify(&move |n| b.inc(n));
     bar.finish_and_clear();
-    result.context("the archive is damaged; no files were extracted")
+    result.context(Key::CLI_DAMAGED.text(i18n::current()))
 }
 
 fn confirm(archive: &str, output: &Path) -> Result<()> {
     if !io::stdin().is_terminal() {
-        bail!(
-            "HatchZip removes the archive during extraction; pass --yes to confirm, or \
-             --keep-archive to keep it"
-        );
+        bail!("{}", Key::CLI_YES_REQUIRED.text(i18n::current()));
     }
     print!(
-        "\nExtract to {} and remove {BOLD}{archive}{BOLD:#} during extraction? [y/N] ",
-        output.display()
+        "{}",
+        i18n::fill2(
+            Key::CLI_CONFIRM.text(i18n::current()),
+            output.display(),
+            archive
+        )
     );
     io::stdout().flush()?;
     let mut answer = String::new();
     io::stdin().lock().read_line(&mut answer)?;
     if !matches!(answer.trim(), "y" | "Y" | "yes") {
-        bail!("extraction cancelled. The archive was not modified");
+        bail!("{}", Key::CLI_CANCELLED.text(i18n::current()));
     }
     Ok(())
 }
 
-fn progress_bar(total: u64, prefix: &'static str) -> ProgressBar {
+fn progress_bar(total: u64, prefix: Key) -> ProgressBar {
     if QUIET.load(Ordering::Relaxed) {
         return ProgressBar::hidden();
     }
@@ -772,7 +844,7 @@ fn progress_bar(total: u64, prefix: &'static str) -> ProgressBar {
         .expect("valid template")
         .progress_chars("=> "),
     );
-    bar.set_prefix(prefix);
+    bar.set_prefix(prefix.text(i18n::current()));
     bar.enable_steady_tick(Duration::from_millis(200));
     bar
 }

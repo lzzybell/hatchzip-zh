@@ -21,6 +21,9 @@ pub struct Settings {
     /// Extract without removing the archive, in the main window. The
     /// right-click menu has an entry of its own for it instead.
     pub keep_archive: bool,
+    /// `en` or `zh`. Missing follows the system's own language, which is
+    /// also what an older file gets.
+    pub lang: Option<String>,
 }
 
 impl Default for Settings {
@@ -29,6 +32,7 @@ impl Default for Settings {
             keep_free: DEFAULT_KEEP_FREE,
             verify_first: false,
             keep_archive: false,
+            lang: None,
         }
     }
 }
@@ -100,6 +104,7 @@ mod tests {
             keep_free: 500_000_000,
             verify_first: true,
             keep_archive: true,
+            lang: Some("zh".into()),
         };
         s.save_to(&path).unwrap();
         assert_eq!(Settings::load_from(&path), s);
@@ -121,6 +126,7 @@ mod tests {
                 keep_free: DEFAULT_KEEP_FREE,
                 verify_first: true,
                 keep_archive: false,
+                lang: None,
             }
         );
         // Files saved before keeping the archive was a choice remove it, as

@@ -63,7 +63,7 @@ export component TaskWindow inherits Window {
             task: root.task;
         }
         if root.task.phase == Phase.no-space: Text {
-            text: "Available: " + root.plan.free + ". Required: " + root.plan.needed + ", plus " + root.plan.keep + " reserved.";
+            text: root.plan.space-line;
             color: Theme.muted;
             wrap: word-wrap;
         }

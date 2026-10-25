@@ -1,5 +1,6 @@
 import { Button, CheckBox, LineEdit, ListView, Palette } from "std-widgets.slint";
 import { Theme, Line, VLine, FolderIcon, FileIcon, DropIcon } from "theme.slint";
+import { Strings } from "i18n.slint";
 import { Phase, PlanView, TaskView, SpacePanel, Progress, Outcome, Busy, TaskButtons, PasswordPrompt } from "parts.slint";
 
 export enum Screen { empty, loading, opened, error }
@@ -26,14 +27,14 @@ component EntryList inherits VerticalLayout {
             padding-right: Theme.gutter;
             spacing: 8px;
             Text {
-                text: "Name";
+                text: Strings.name-column;
                 color: Theme.muted;
                 font-size: Theme.small-size;
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
             Text {
-                text: "Size";
+                text: Strings.size-column;
                 color: Theme.muted;
                 font-size: Theme.small-size;
                 vertical-alignment: center;
@@ -100,6 +101,12 @@ export component MainWindow inherits Window {
     in-out property <bool> remove-archive: true;
     // The formats line under the Open button; RAR only in builds with it.
     in property <string> formats: "Or drag an archive onto this window. Supported formats: ZIP, 7z, tar, tar.gz, and split archives.";
+    // The note under the entries of a half-extracted archive. Built by
+    // Rust, which knows the output folder and whether it is kept.
+    in property <string> mode-note;
+    // The language menu's ticks, set by Rust.
+    in-out property <bool> lang-en;
+    in-out property <bool> lang-zh;
     // The half-extracted run being resumed keeps its archive.
     in property <bool> kept-run;
     in property <TaskView> task;
@@ -133,6 +140,8 @@ export component MainWindow inherits Window {
     callback back();
     callback about();
     callback quit();
+    callback choose-english();
+    callback choose-chinese();
 
     title: root.screen == Screen.opened ? root.archive-name + " - HatchZip" : "HatchZip";
     preferred-width: 980px;
@@ -143,9 +152,9 @@ export component MainWindow inherits Window {
 
     MenuBar {
         Menu {
-            title: "File";
+            title: Strings.menu-file;
             MenuItem {
-                title: "Open…";
+                title: Strings.menu-open;
                 shortcut: @keys(Control + O);
                 enabled: root.task.phase == Phase.idle || root.task.phase == Phase.done;
                 activated => {
@@ -154,7 +163,7 @@ export component MainWindow inherits Window {
             }
             MenuSeparator { }
             MenuItem {
-                title: "Quit";
+                title: Strings.menu-quit;
                 shortcut: @keys(Control + Q);
                 activated => {
                     root.quit();
@@ -162,7 +171,27 @@ export component MainWindow inherits Window {
             }
         }
         Menu {
-            title: "Settings";
+            title: Strings.menu-settings;
+            Menu {
+                title: Strings.menu-language;
+                MenuItem {
+                    title: Strings.lang-english;
+                    checkable: true;
+                    checked <=> root.lang-en;
+                    activated => {
+                        root.choose-english();
+                    }
+                }
+                MenuItem {
+                    title: Strings.lang-chinese;
+                    checkable: true;
+                    checked <=> root.lang-zh;
+                    activated => {
+                        root.choose-chinese();
+                    }
+                }
+            }
+            MenuSeparator { }
             if root.shell-menu-available: MenuItem {
                 title: root.shell-menu-label;
                 checkable: true;
@@ -172,7 +201,7 @@ export component MainWindow inherits Window {
                 }
             }
             MenuItem {
-                title: "Verify archive before extracting";
+                title: Strings.verify-checkbox;
                 checkable: true;
                 checked <=> root.verify-first;
                 activated => {
@@ -180,7 +209,7 @@ export component MainWindow inherits Window {
                 }
             }
             MenuItem {
-                title: "Remove the archive during extraction";
+                title: Strings.remove-checkbox;
                 checkable: true;
                 checked <=> root.remove-archive;
                 activated => {
@@ -189,9 +218,9 @@ export component MainWindow inherits Window {
             }
         }
         Menu {
-            title: "Help";
+            title: Strings.menu-help;
             MenuItem {
-                title: "About HatchZip";
+                title: Strings.menu-about;
                 activated => {
                     root.about();
                 }
@@ -209,13 +238,13 @@ export component MainWindow inherits Window {
                 DropIcon { }
             }
             Text {
-                text: root.drop-hover ? "Drop the archive to open it" : "No archive open";
+                text: root.drop-hover ? Strings.drop-to-open : Strings.no-archive-open;
                 font-size: 16px;
                 font-weight: 600;
                 horizontal-alignment: center;
             }
             Text {
-                text: "The archive is removed progressively during extraction, so only the space for the extracted files is required.";
+                text: Strings.empty-description;
                 color: Theme.muted;
                 horizontal-alignment: center;
                 wrap: word-wrap;
@@ -224,7 +253,7 @@ export component MainWindow inherits Window {
                 alignment: center;
                 padding-top: 6px;
                 Button {
-                    text: "Open archive…";
+                    text: Strings.open-archive;
                     primary: true;
                     clicked => {
                         root.open-archive();
@@ -259,7 +288,7 @@ export component MainWindow inherits Window {
         HorizontalLayout {
             alignment: center;
             Busy {
-                text: root.loading-detail != "" ? root.loading-detail : "Opening " + root.archive-name + "…";
+                text: root.loading-detail != "" ? root.loading-detail : Strings.opening-prefix + root.archive-name + "…";
             }
         }
     }
@@ -269,7 +298,7 @@ export component MainWindow inherits Window {
         spacing: 12px;
         padding: 40px;
         Text {
-            text: "Unable to open " + root.archive-name;
+            text: Strings.unable-to-open-prefix + root.archive-name;
             font-size: 16px;
             font-weight: 600;
             horizontal-alignment: center;
@@ -284,7 +313,7 @@ export component MainWindow inherits Window {
             alignment: center;
             padding-top: 6px;
             Button {
-                text: "Open another archive…";
+                text: Strings.open-another-archive;
                 clicked => {
                     root.open-archive();
                 }
@@ -319,7 +348,7 @@ export component MainWindow inherits Window {
             EntryList {
                 horizontal-stretch: 1;
                 entries: root.entries;
-                empty-text: root.mode == Mode.orphan ? "All entries have been extracted." : "This archive is empty.";
+                empty-text: root.mode == Mode.orphan ? Strings.all-extracted : Strings.archive-empty;
             }
             VLine { }
             SpacePanel {
@@ -336,7 +365,7 @@ export component MainWindow inherits Window {
             spacing: 12px;
 
             if root.mode == Mode.resume || root.mode == Mode.orphan: Text {
-                text: root.mode == Mode.resume ? "This archive is partially extracted to " + root.output + "." + (root.kept-run ? " The archive is kept." : "") : "All entries have been extracted to " + root.output + ". Select Finish to remove the remaining temporary files.";
+                text: root.mode-note;
                 wrap: word-wrap;
                 font-weight: 600;
             }
@@ -344,7 +373,7 @@ export component MainWindow inherits Window {
             if root.mode == Mode.fresh: HorizontalLayout {
                 spacing: 8px;
                 Text {
-                    text: "Extract to";
+                    text: Strings.extract-to;
                     vertical-alignment: center;
                     width: 112px;
                 }
@@ -354,7 +383,7 @@ export component MainWindow inherits Window {
                     horizontal-stretch: 1;
                 }
                 Button {
-                    text: "Browse…";
+                    text: Strings.browse;
                     clicked => {
                         root.change-output();
                     }
@@ -364,7 +393,7 @@ export component MainWindow inherits Window {
             if root.mode != Mode.orphan: HorizontalLayout {
                 spacing: 8px;
                 Text {
-                    text: "Reserved space";
+                    text: Strings.reserved-space;
                     vertical-alignment: center;
                     width: 112px;
                 }
@@ -378,7 +407,7 @@ export component MainWindow inherits Window {
                     }
                 }
                 Text {
-                    text: root.keep-free-valid ? "GB" : "GB. Enter a number, such as 2 or 0.5.";
+                    text: root.keep-free-valid ? Strings.gb : Strings.gb-invalid;
                     vertical-alignment: center;
                     color: root.keep-free-valid ? Palette.foreground : Theme.danger;
                 }
@@ -386,7 +415,7 @@ export component MainWindow inherits Window {
                     width: 16px;
                 }
                 if root.mode == Mode.fresh: CheckBox {
-                    text: "Verify archive before extracting";
+                    text: Strings.verify-checkbox;
                     checked <=> root.verify-first;
                     toggled => {
                         root.verify-first-toggled();
@@ -404,7 +433,7 @@ export component MainWindow inherits Window {
                     width: 112px;
                 }
                 CheckBox {
-                    text: "Remove the archive during extraction";
+                    text: Strings.remove-checkbox;
                     checked <=> root.remove-archive;
                     toggled => {
                         root.remove-archive-toggled();
@@ -418,7 +447,7 @@ export component MainWindow inherits Window {
             HorizontalLayout {
                 spacing: 8px;
                 Text {
-                    text: root.mode != Mode.fresh ? "" : root.remove-archive ? "The archive is removed progressively during extraction. An interrupted extraction can be resumed." : "The archive is kept unchanged, so space is required for all extracted files. An interrupted extraction can be resumed.";
+                    text: root.mode != Mode.fresh ? "" : root.remove-archive ? Strings.note-inplace : Strings.note-keep;
                     color: Theme.muted;
                     font-size: Theme.small-size;
                     wrap: word-wrap;
@@ -426,20 +455,20 @@ export component MainWindow inherits Window {
                     horizontal-stretch: 1;
                 }
                 if root.mode == Mode.fresh: Button {
-                    text: "Test";
+                    text: Strings.test;
                     clicked => {
                         root.test();
                     }
                 }
                 // A kept archive was never changed; there is nothing to restore.
                 if root.mode == Mode.resume && !root.kept-run: Button {
-                    text: "Restore archive";
+                    text: Strings.restore-archive;
                     clicked => {
                         root.give-back();
                     }
                 }
                 Button {
-                    text: root.mode == Mode.fresh ? "Extract" : (root.mode == Mode.resume ? "Resume extraction" : "Finish");
+                    text: root.mode == Mode.fresh ? Strings.extract : (root.mode == Mode.resume ? Strings.resume-extraction : Strings.finish);
                     primary: true;
                     enabled: root.mode == Mode.orphan || (root.plan.ready && root.plan.fits && root.keep-free-valid);
                     clicked => {
@@ -475,7 +504,7 @@ export component MainWindow inherits Window {
                 // nothing to reopen; offer the same way out as the error
                 // screen instead of leaving only the folder.
                 if root.task.phase == Phase.done && root.task.can-open-folder: Button {
-                    text: "Open another archive…";
+                    text: Strings.open-another-archive;
                     clicked => {
                         root.open-archive();
                     }

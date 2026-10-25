@@ -1945,6 +1945,7 @@ dependencies = [
  "ctrlc",
  "flate2",
  "hatchzip-core",
+ "hatchzip-i18n",
  "indicatif",
  "rpassword",
  "serde_json",
@@ -1982,6 +1983,7 @@ dependencies = [
  "anyhow",
  "clap",
  "hatchzip-core",
+ "hatchzip-i18n",
  "hatchzip-shell",
  "i-slint-backend-testing",
  "open",
@@ -1997,10 +1999,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hatchzip-i18n"
+version = "0.1.3"
+
+[[package]]
 name = "hatchzip-shell"
 version = "0.1.3"
 dependencies = [
  "anyhow",
+ "hatchzip-i18n",
  "tempfile",
  "winreg",
 ]
